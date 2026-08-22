@@ -144,6 +144,7 @@ ValueType :: enum u8
     NIL;
     BOOL;
     NUMBER;
+    OBJ;
 }
 
 Value :: struct
@@ -152,6 +153,7 @@ Value :: struct
     union {
         boolean: bool;
         number: float64;
+        obj: *Obj;
     }
 }
 
@@ -162,6 +164,7 @@ value_to_string :: (value: Value) -> string
         case .NIL; return "nil";
         case .BOOL; return ifx value.boolean then "true" else "false";
         case .NUMBER; return tprint("%", value.number);
+        case .OBJ; return object_to_string(value.obj);
     }
 }
 
@@ -172,6 +175,7 @@ is_falsey :: (value: Value) -> bool
         case .NIL; return true;
         case .BOOL; return !value.boolean;
         case .NUMBER; return value.number == 0;
+        case .OBJ; return value.obj == null;
     }
     return false;
 }
@@ -184,11 +188,18 @@ values_equal :: (a: Value, b: Value) -> bool
         case .NIL; return true;
         case .BOOL; return a.boolean == b.boolean;
         case .NUMBER; return a.number == b.number;
+        case .OBJ; return objects_equal(a.obj, b.obj);
     }
 }
 
 nil_value :: () -> Value { return .{ type = .NIL }; }
 bool_value :: (boolean: bool) -> Value { return .{ type = .BOOL, boolean = boolean }; }
 number_value :: (number: float64) -> Value { return .{ type = .NUMBER, number = number }; }
+
 make_value :: (boolean: bool) -> Value { return bool_value(boolean); }
 make_value :: (number: float64) -> Value { return number_value(number); }
+
+is_number :: (value: Value) -> bool
+{
+    return value.type == .NUMBER;
+}

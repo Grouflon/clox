@@ -15,7 +15,6 @@ init :: (vm: *VM)
 
 shutdown :: (vm: *VM)
 {
-
 }
 
 InterpretResult :: enum
@@ -118,7 +117,28 @@ run :: (vm: *VM) -> InterpretResult
             case .EQUAL; push(vm, bool_value(values_equal(pop(vm), pop(vm))));
             case .GREATER; BINARY_OP(vm, ">");
             case .LESS; BINARY_OP(vm, "<");
-            case .ADD; BINARY_OP(vm, "+");
+            case .ADD;
+            {
+                if is_string(peek(vm, 0)) && is_string(peek(vm, 1))
+                {
+                    b: = as_obj_string(pop(vm));
+                    a: = as_obj_string(pop(vm));
+                    result: = obj_string_value(tprint("%%", a.str, b.str));
+
+                    push(vm, result);
+                }
+                else if is_number(peek(vm, 0)) && is_number(peek(vm, 1))
+                {
+                    b: = pop(vm).number;
+                    a: = pop(vm).number;
+                    push(vm, number_value(a + b));
+                }
+                else
+                {
+                    runtime_error(vm, "Operands must be two numbers or two strings.");
+                    return .RUNTIME_ERROR;
+                }
+            }
             case .SUBTRACT; BINARY_OP(vm, "-");
             case .MULTIPLY; BINARY_OP(vm, "*");
             case .DIVIDE; BINARY_OP(vm, "/");

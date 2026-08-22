@@ -55,7 +55,7 @@ rules :: ParseRule.[
     .{null,              compile_binary,     .COMPARISON},   // LESS;
     .{null,              compile_binary,     .COMPARISON},   // LESS_EQUAL;
     .{null,              null,               .NONE},         // IDENTIFIER;
-    .{null,              null,               .NONE},         // STRING;
+    .{compile_string,    null,               .NONE},         // STRING;
     .{compile_number,    null,               .NONE},         // NUMBER;
     .{null,              null,               .NONE},         // AND;
     .{null,              null,               .NONE},         // CLASS;
@@ -200,6 +200,17 @@ compile_literal :: (c: *Compiler)
     }
 }
 
+compile_string :: (c: *Compiler)
+{
+    assert(c.previous.type == .STRING);
+
+    str: = c.previous.lexeme;
+    // strip quotes
+    str.data += 1;
+    str.count -= 2;
+
+    emit_constant(c, obj_string_value(str));
+}
 
 compile_grouping :: (c: *Compiler)
 {

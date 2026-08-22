@@ -1,35 +1,55 @@
-#import "Basic";
+#import "Basic"()(MEMORY_DEBUGGER = DEBUG_MEMORY);
 
 #load "chunk.jai";
+#load "object.jai";
 #load "vm.jai";
 #load "compiler.jai";
 #load "scanner.jai";
 #load "tools.jai";
 
+DEBUG_MEMORY :: true;
 DEBUG_PRINT_CODE :: true;
 DEBUG_TRACE_EXECUTION :: true;
 
 main :: ()
 {
-    args: = get_command_line_arguments();
-    if args.count ==
     {
-        case 1;
+        args: = get_command_line_arguments();
+        if args.count ==
         {
-            repl();
-        }
-        case 2;
-        {
-            result: = run_file(args[1]);
-            if result ==
+            case 1;
             {
-                case .COMPILE_ERROR; exit(65);
-                case .RUNTIME_ERROR; exit(70);
+                repl();
+            }
+            case 2;
+            {
+                result: = run_file(args[1]);
+                if result ==
+                {
+                    case .COMPILE_ERROR; exit(65);
+                    case .RUNTIME_ERROR; exit(70);
+                }
+            }
+            case;
+            {
+                print("Usage: clox [script]");
             }
         }
-        case;
+
+        array_free(args);
+        free_objects();
+        deinit(*strings);
+    }
+
+    // Memory leak check
+    #if DEBUG_MEMORY
+    {
+        report: = make_leak_report();
+        if report.sorted_summaries.count
         {
-            print("Usage: clox [script]");
+            log_error("\n=========\nMemory Leak!!\n=========");
+            log_leak_report(report);
+            assert(false);
         }
     }
 }
