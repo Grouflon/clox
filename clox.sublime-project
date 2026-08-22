@@ -23,8 +23,12 @@
 				},
 				{
 					"name" : "build & run",
-					"shell_cmd" : "jai clox.jai -exe clox & clox.exe",
+					"shell_cmd" : "jai clox.jai -exe clox && cmd /C start clox.exe",
 				},
+				{
+					"name" : "build & debug",
+					"shell_cmd" : "jai clox.jai -exe clox && raddbg clox.raddbg_project",
+				}
 			]
 		}
 	]

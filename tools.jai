@@ -55,3 +55,35 @@ tprint_fixed_length_string :: (str: string, length: int, expand_side: ExpandSide
 
     return .{length, buf};
 }
+
+read_line :: () -> string
+{
+    BUFFER_SIZE :: 1024;
+    buffer: [BUFFER_SIZE] u8;
+
+    stdin := GetStdHandle(STD_INPUT_HANDLE);
+    bytes_read: s32;
+    if !ReadConsoleA(stdin, buffer.data, xx buffer.count, *bytes_read) || bytes_read == 0
+    {
+        return "";
+    }
+
+    result: string;
+    result.data = talloc(bytes_read-2);
+    result.count = bytes_read-2;
+    memcpy(result.data, buffer.data, bytes_read-2);
+    return result;
+}
+
+kernel32 :: #system_library "kernel32";
+ReadConsoleA  :: (
+    hConsoleHandle: HANDLE, 
+    buff : *u8, 
+    chars_to_read : s32,  
+    chars_read : *s32, 
+    lpInputControl := *void 
+) -> bool #foreign kernel32;
+
+#scope_file
+
+#import "Windows";
