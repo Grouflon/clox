@@ -15,6 +15,11 @@ OpCode :: enum u8
     NEGATE;
     NOT;
     RETURN;
+    PRINT;
+    POP;
+    DEFINE_GLOBAL;
+    GET_GLOBAL;
+    SET_GLOBAL;
 }
 
 LineInfo :: struct
@@ -97,6 +102,11 @@ disassemble_instruction :: (chunk: *Chunk, offset: int) -> int
         case .DIVIDE; return simple_instruction("DIVIDE", offset);
         case .NOT; return simple_instruction("NOT", offset);
         case .RETURN; return simple_instruction("RETURN", offset);
+        case .PRINT; return simple_instruction("PRINT", offset);
+        case .POP; return simple_instruction("POP", offset);
+        case .DEFINE_GLOBAL; return constant_instruction("DEFINE_GLOBAL", chunk, offset);
+        case .GET_GLOBAL; return constant_instruction("GET_GLOBAL", chunk, offset);
+        case .SET_GLOBAL; return constant_instruction("SET_GLOBAL", chunk, offset);
         case;
         {
             print("Unknown OpCode: %", formatInt(instruction.(u8), 16, 2));

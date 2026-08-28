@@ -56,9 +56,9 @@ main :: ()
 
 repl :: ()
 {
-    // interpreter: Interpreter;
-    // initialize(*interpreter);
-    // defer shutdown(*interpreter);
+    vm: VM;
+    init(*vm);
+    defer shutdown(*vm);
 
     while true
     {
@@ -67,15 +67,15 @@ repl :: ()
         
         if (line.count == 1 && line[0] == 0x4) || line == "exit" break;
 
-        result: = interpret(line);
-        // run(*interpreter, line);
+        chunk: Chunk;
+        init(*chunk);
+        defer shutdown(*chunk);
+        if !compile(line, *chunk)
+        {
+            continue;
+        }
 
-        // if !interpreter.has_error && interpreter.has_last_statement_value
-        // {
-        //     log("%", to_string(interpreter.last_statement_value));
-        // }
-
-        // interpreter.has_error = false;
+        interpret(*vm, *chunk);
     }
     
 }
@@ -92,17 +92,12 @@ run_file :: (path: string) -> InterpretResult
         return .COMPILE_ERROR;
     }
 
-    return interpret(data);
-}
-
-interpret :: (source: string) -> InterpretResult
-{
-    // Compile
     chunk: Chunk;
     init(*chunk);
     defer shutdown(*chunk);
 
-    if !compile(source, *chunk)
+    // Compile
+    if !compile(data, *chunk)
     {
         return .COMPILE_ERROR;
     }
@@ -111,7 +106,6 @@ interpret :: (source: string) -> InterpretResult
     vm: VM;
     init(*vm);
     defer shutdown(*vm);
-
     return interpret(*vm, *chunk);
 }
 

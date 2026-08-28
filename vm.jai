@@ -6,6 +6,7 @@ VM :: struct
     ip: *u8;
     stack: [STACK_SIZE]Value;
     sp: *Value;
+    globals: Table(*ObjString, Value);
 }
 
 init :: (vm: *VM)
@@ -15,6 +16,7 @@ init :: (vm: *VM)
 
 shutdown :: (vm: *VM)
 {
+    table_reset(*vm.globals);
 }
 
 InterpretResult :: enum
@@ -71,6 +73,14 @@ run :: (vm: *VM) -> InterpretResult
     read_constant :: (vm: *VM) -> Value
     {
         return vm.chunk.constants[read_byte(vm)];
+    }
+
+    read_string :: (vm: *VM) -> *ObjString
+    {
+        value: = read_constant(vm);
+        assert(value.type == .OBJ);
+        assert(value.obj.type == .STRING);
+        return value.obj.(*ObjString);
     }
 
     BINARY_OP :: (vm: *VM, $op: string) #expand
@@ -153,12 +163,48 @@ run :: (vm: *VM) -> InterpretResult
                 push(vm, number_value(-pop(vm).number));
             }
             case .NOT; push(vm, bool_value(is_falsey(pop(vm))));
-            case .RETURN;
+            case .PRINT;
             {
                 log("%", value_to_string(pop(vm)));
-                return .OK;
+            }
+            case .POP;
+            {
+                pop(vm);
+            }
+            case .DEFINE_GLOBAL;
+            {
+                name: = read_string(vm);
+                value: = pop(vm);
+                table_set(*vm.globals, name, value);
+            }
+            case .GET_GLOBAL;
+            {
+                name: = read_string(vm);
+                found, value: = table_find(*vm.globals, name);
+                if !found
+                {
+                    runtime_error(vm, tprint("Undefined variable '%'.", name.str));
+                    return .RUNTIME_ERROR;
+                }
+                push(vm, value);
+            }
+            case .SET_GLOBAL;
+            {
+                name: = read_string(vm);
+                found, value: = table_find(*vm.globals, name);
+                if !found
+                {
+                    runtime_error(vm, tprint("Undefined variable '%'.", name.str));
+                    return .RUNTIME_ERROR;
+                }
+                table_set(*vm.globals, name, peek(vm));
+                // push(vm, value);
             }
 
+            case .RETURN;
+            {
+                return .OK;
+            }
             case .NOP;
         }
     }

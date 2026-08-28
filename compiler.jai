@@ -1,4 +1,3 @@
-
 Compiler :: struct
 {
     scanner: Scanner;
@@ -9,6 +8,184 @@ Compiler :: struct
     panic_mode: bool;
     had_error: bool;
 }
+
+compile :: (source: string, chunk: *Chunk) -> bool
+{
+    compiler: Compiler;
+    c: = *compiler;
+
+    c.compiling_chunk = chunk;
+    scanner_init(*c.scanner, source);
+    advance(c);
+
+    while !try_consume(c, .EOF)
+    {
+        compile_declaration(c);
+    }
+
+    end_compiler(c);
+    
+    return !c.had_error;
+}
+
+compile_declaration :: (c: *Compiler)
+{
+    if try_consume(c, .VAR)
+    {
+        compile_var_statement(c);
+    }
+    else
+    {
+        compile_statement(c);
+    }
+
+    if c.panic_mode
+    {
+        synchronize(c);
+    }
+}
+
+compile_statement :: (c: *Compiler)
+{
+    if try_consume(c, .PRINT)
+    {
+        compile_print_statement(c);
+    }
+    else
+    {
+        compile_expression_statement(c);
+    }
+}
+
+compile_var_statement :: (c: *Compiler)
+{
+    global: = parse_variable(c, "Expect variable name.");
+
+    if try_consume(c, .EQUAL)
+    {
+        compile_expression(c);
+    }
+    else
+    {
+        emit_byte(c, xx OpCode.NIL);
+    }
+    consume(c, .SEMICOLON, "Expect ';' after variable declaration.");
+
+    define_variable(c, global);
+}
+
+compile_print_statement :: (c: *Compiler)
+{
+    compile_expression(c);
+    consume(c, .SEMICOLON, "Expect ';' after value.");
+    emit_byte(c, xx OpCode.PRINT);
+}
+
+compile_expression_statement :: (c: *Compiler)
+{
+    compile_expression(c);
+    consume(c, .SEMICOLON, "Expect ';' after value.");
+    emit_byte(c, xx OpCode.POP);
+}
+
+compile_expression :: (c: *Compiler)
+{
+    parse_precedence(c, .ASSIGNMENT);
+}
+
+compile_number :: (c: *Compiler, can_assign: bool)
+{
+    assert(c.previous.type == .NUMBER);
+
+    number: = string_to_float64(c.previous.lexeme);
+    emit_constant(c, number_value(number));
+}
+
+compile_literal :: (c: *Compiler, can_assign: bool)
+{
+    if c.previous.type ==
+    {
+        case .FALSE; emit_byte(c, xx OpCode.FALSE);
+        case .NIL; emit_byte(c, xx OpCode.NIL);
+        case .TRUE; emit_byte(c, xx OpCode.TRUE);
+        case; return; //unreachable
+    }
+}
+
+compile_string :: (c: *Compiler, can_assign: bool)
+{
+    assert(c.previous.type == .STRING);
+
+    str: = c.previous.lexeme;
+    // strip quotes
+    str.data += 1;
+    str.count -= 2;
+
+    emit_constant(c, obj_string_value(str));
+}
+
+compile_variable :: (c: *Compiler, can_assign: bool)
+{
+    compile_named_variable(c, c.previous, can_assign);
+}
+
+compile_named_variable :: (c: *Compiler, name: Token, can_assign: bool)
+{
+    arg: = identifier_constant(c, name);
+
+    if can_assign && try_consume(c, .EQUAL)
+    {
+        compile_expression(c);
+        emit_bytes(c, xx OpCode.SET_GLOBAL, arg);
+    }
+    else
+    {
+        emit_bytes(c, xx OpCode.GET_GLOBAL, arg);
+    }
+}
+
+compile_grouping :: (c: *Compiler, can_assign: bool)
+{
+    compile_expression(c);
+    consume(c, .RIGHT_PAREN, "Expect ')' after expression.");
+}
+
+compile_unary :: (c: *Compiler, can_assign: bool)
+{
+    operator_type: = c.previous.type;
+
+    parse_precedence(c, .UNARY);
+
+    if operator_type ==
+    {
+        case .BANG; emit_byte(c, xx OpCode.NOT);
+        case .MINUS; emit_byte(c, xx OpCode.NEGATE);
+    }
+}
+
+compile_binary :: (c: *Compiler)
+{
+    operator_type: = c.previous.type;
+    rule: = get_rule(operator_type);
+    parse_precedence(c, rule.precedence + 1);
+
+    if operator_type ==
+    {
+        case .BANG_EQUAL;    emit_bytes(c, xx OpCode.EQUAL, xx OpCode.NOT);
+        case .EQUAL_EQUAL;   emit_byte(c, xx OpCode.EQUAL);
+        case .GREATER;       emit_byte(c, xx OpCode.GREATER);
+        case .GREATER_EQUAL; emit_bytes(c, xx OpCode.LESS, xx OpCode.NOT);
+        case .LESS;          emit_byte(c, xx OpCode.LESS);
+        case .LESS_EQUAL;    emit_bytes(c, xx OpCode.GREATER, xx OpCode.NOT);
+        case .PLUS;          emit_byte(c, xx OpCode.ADD);
+        case .MINUS;         emit_byte(c, xx OpCode.SUBTRACT);
+        case .STAR;          emit_byte(c, xx OpCode.MULTIPLY);
+        case .SLASH;         emit_byte(c, xx OpCode.DIVIDE);
+        case;                return; // unreachable
+    }
+}
+
+#scope_file
 
 Precedence :: enum
 {
@@ -25,11 +202,12 @@ Precedence :: enum
     PRIMARY;
 }
 
+PrefixParseFn :: #type (c: *Compiler, can_assign: bool);
 ParseFn :: #type (c: *Compiler);
 
 ParseRule :: struct
 {
-    prefix: ParseFn;
+    prefix: PrefixParseFn;
     infix: ParseFn;
     precedence: Precedence;
 }
@@ -54,7 +232,7 @@ rules :: ParseRule.[
     .{null,              compile_binary,     .COMPARISON},   // GREATER_EQUAL;
     .{null,              compile_binary,     .COMPARISON},   // LESS;
     .{null,              compile_binary,     .COMPARISON},   // LESS_EQUAL;
-    .{null,              null,               .NONE},         // IDENTIFIER;
+    .{compile_variable,  null,               .NONE},         // IDENTIFIER;
     .{compile_string,    null,               .NONE},         // STRING;
     .{compile_number,    null,               .NONE},         // NUMBER;
     .{null,              null,               .NONE},         // AND;
@@ -77,27 +255,9 @@ rules :: ParseRule.[
     .{null,              null,               .NONE},         // EOF;
 ];
 
-
 get_rule :: (type: TokenType) -> ParseRule
 {
     return rules[type];
-}
-
-compile :: (source: string, chunk: *Chunk) -> bool
-{
-    compiler: Compiler;
-    c: = *compiler;
-
-    c.compiling_chunk = chunk;
-    scanner_init(*c.scanner, source);
-    advance(c);
-
-    compile_expression(c);
-    consume(c, .EOF, "Expect end of expression.");
-
-    end_compiler(c);
-    
-    return !c.had_error;
 }
 
 current_chunk :: (c: *Compiler) -> *Chunk
@@ -145,6 +305,13 @@ advance :: (c: *Compiler)
     }
 }
 
+try_consume :: (c: *Compiler, type: TokenType) -> bool
+{
+    if c.current.type != type return false;
+    advance(c);
+    return true;
+}
+
 consume :: (c: *Compiler, type: TokenType, message: string)
 {
     if c.current.type == type
@@ -162,11 +329,12 @@ parse_precedence :: (c: *Compiler, precedence: Precedence)
     prefix: = get_rule(c.previous.type).prefix;
     if prefix == null
     {
-        error(c, "Expect expression");
+        error(c, "Expect expression.");
         return;
     }
 
-    prefix(c);
+    can_assign: = precedence <= .ASSIGNMENT;
+    prefix(c, can_assign);
 
     while precedence <= get_rule(c.current.type).precedence
     {
@@ -174,83 +342,27 @@ parse_precedence :: (c: *Compiler, precedence: Precedence)
         infix: = get_rule(c.previous.type).infix;
         infix(c);
     }
-}
 
-compile_expression :: (c: *Compiler)
-{
-    parse_precedence(c, .ASSIGNMENT);
-}
-
-compile_number :: (c: *Compiler)
-{
-    assert(c.previous.type == .NUMBER);
-
-    number: = string_to_float64(c.previous.lexeme);
-    emit_constant(c, number_value(number));
-}
-
-compile_literal :: (c: *Compiler)
-{
-    if c.previous.type ==
+    if can_assign && try_consume(c, .EQUAL)
     {
-        case .FALSE; emit_byte(c, xx OpCode.FALSE);
-        case .NIL; emit_byte(c, xx OpCode.NIL);
-        case .TRUE; emit_byte(c, xx OpCode.TRUE);
-        case; return; //unreachable
+        error(c, "Invalid assignment target.");
     }
 }
 
-compile_string :: (c: *Compiler)
+parse_variable :: (c: *Compiler, message: string) -> u8
 {
-    assert(c.previous.type == .STRING);
-
-    str: = c.previous.lexeme;
-    // strip quotes
-    str.data += 1;
-    str.count -= 2;
-
-    emit_constant(c, obj_string_value(str));
+    consume(c, .IDENTIFIER, message);
+    return identifier_constant(c, c.previous);
 }
 
-compile_grouping :: (c: *Compiler)
+define_variable :: (c: *Compiler, global: u8)
 {
-    compile_expression(c);
-    consume(c, .RIGHT_PAREN, "Expect ')' after expression.");
+    emit_bytes(c, xx OpCode.DEFINE_GLOBAL, global);
 }
 
-compile_unary :: (c: *Compiler)
+identifier_constant :: (c: *Compiler, name: Token) -> u8
 {
-    operator_type: = c.previous.type;
-
-    parse_precedence(c, .UNARY);
-
-    if operator_type ==
-    {
-        case .BANG; emit_byte(c, xx OpCode.NOT);
-        case .MINUS; emit_byte(c, xx OpCode.NEGATE);
-    }
-}
-
-compile_binary :: (c: *Compiler)
-{
-    operator_type: = c.previous.type;
-    rule: = get_rule(operator_type);
-    parse_precedence(c, rule.precedence + 1);
-
-    if operator_type ==
-    {
-        case .BANG_EQUAL;    emit_bytes(c, xx OpCode.EQUAL, xx OpCode.NOT);
-        case .EQUAL_EQUAL;   emit_byte(c, xx OpCode.EQUAL);
-        case .GREATER;       emit_byte(c, xx OpCode.GREATER);
-        case .GREATER_EQUAL; emit_bytes(c, xx OpCode.LESS, xx OpCode.NOT);
-        case .LESS;          emit_byte(c, xx OpCode.LESS);
-        case .LESS_EQUAL;    emit_bytes(c, xx OpCode.GREATER, xx OpCode.NOT);
-        case .PLUS;          emit_byte(c, xx OpCode.ADD);
-        case .MINUS;         emit_byte(c, xx OpCode.SUBTRACT);
-        case .STAR;          emit_byte(c, xx OpCode.MULTIPLY);
-        case .SLASH;         emit_byte(c, xx OpCode.DIVIDE);
-        case;                return; // unreachable
-    }
+    return make_constant(c, obj_string_value(name.lexeme));
 }
 
 end_compiler :: (c: *Compiler)
@@ -263,6 +375,29 @@ end_compiler :: (c: *Compiler)
         {
             disassemble_chunk(current_chunk(c), "code");
         }
+    }
+}
+
+synchronize :: (c: *Compiler)
+{
+    c.panic_mode = false;
+
+    while c.current.type != .EOF
+    {
+        if c.previous.type == .SEMICOLON return;
+        if c.current.type ==
+        {
+            case .CLASS; #through;
+            case .FUN; #through;
+            case .VAR; #through;
+            case .FOR; #through;
+            case .IF; #through;
+            case .WHILE; #through;
+            case .PRINT; #through;
+            case .RETURN;
+                return;
+        }
+        advance(c);
     }
 }
 
@@ -293,5 +428,4 @@ error_at :: (c: *Compiler, token: Token, message: string)
     c.panic_mode = true;
 }
 
-#scope_file
 #import "Math";
