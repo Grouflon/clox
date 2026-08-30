@@ -1,0 +1,6 @@
+for (var a = 0; a < 10; a = a + 2)
+{
+    print a;
+}
+
+//print a > 10 or a < 0;

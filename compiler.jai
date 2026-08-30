@@ -62,6 +62,18 @@ compile_statement :: (c: *Compiler)
         compile_block_statement(c);
         end_scope(c);
     }
+    else if try_consume(c, .IF)
+    {
+        compile_if_statement(c);
+    }
+    else if try_consume(c, .WHILE)
+    {
+        compile_while_statement(c);
+    }
+    else if try_consume(c, .FOR)
+    {
+        compile_for_statement(c);
+    }
     else
     {
         compile_expression_statement(c);
@@ -107,6 +119,103 @@ compile_block_statement :: (c: *Compiler)
     }
 
     consume(c, .RIGHT_BRACE, "Expect '}' after block.");
+}
+
+compile_if_statement :: (c: *Compiler)
+{
+    consume(c, .LEFT_PAREN, "Expect '(' after 'if'.");
+    compile_expression(c);
+    consume(c, .RIGHT_PAREN, "Expect ')' after condition.");
+
+    skip_then_jump: = emit_jump(c, .JUMP_IF_FALSE);
+    emit_byte(c, xx OpCode.POP);
+    compile_statement(c);
+    skip_else_jump: = emit_jump(c, .JUMP);
+    patch_jump(c, skip_then_jump);
+    emit_byte(c, xx OpCode.POP);
+    if try_consume(c, .ELSE)
+    {
+        compile_statement(c);
+    }
+    patch_jump(c, skip_else_jump);
+}
+
+compile_while_statement :: (c: *Compiler)
+{
+    loop_start: = c.compiling_chunk.code.count;
+
+    consume(c, .LEFT_PAREN, "Expect '(' after 'while'.");
+    compile_expression(c);
+    consume(c, .RIGHT_PAREN, "Expect ')' after condition.");
+
+    exit_jump: = emit_jump(c, .JUMP_IF_FALSE);
+    emit_byte(c, xx OpCode.POP);
+
+    compile_statement(c);
+    emit_loop(c, loop_start);
+
+    patch_jump(c, exit_jump);
+    emit_byte(c, xx OpCode.POP);
+}
+
+compile_for_statement :: (c: *Compiler)
+{
+    begin_scope(c);
+    defer end_scope(c);
+
+    consume(c, .LEFT_PAREN, "Expect '(' after 'for'.");
+
+    // Initializer clause
+    if try_consume(c, .SEMICOLON)
+    {
+        // No initializer
+    }
+    else if try_consume(c, .VAR)
+    {
+        compile_var_statement(c);
+    }
+    else
+    {
+        compile_expression_statement(c);
+    }
+
+    loop_start: = c.compiling_chunk.code.count;
+    exit_jump: = -1;
+
+    // Condition clause
+    if !try_consume(c, .SEMICOLON)
+    {
+        compile_expression(c);
+        consume(c, .SEMICOLON, "Expect ';' after loop condition.");
+
+        exit_jump = emit_jump(c, .JUMP_IF_FALSE);
+        emit_byte(c, xx OpCode.POP);
+    }
+
+    // Increment clause
+    if !try_consume(c, .RIGHT_PAREN)
+    {
+        body_jump: = emit_jump(c, .JUMP);
+
+        increment_start: = c.compiling_chunk.code.count;
+        compile_expression(c);
+        emit_byte(c, xx OpCode.POP);
+        consume(c, .RIGHT_PAREN, "Expect ')' after for clauses.");
+        emit_loop(c, loop_start);
+        loop_start = increment_start;
+        
+        patch_jump(c, body_jump);
+    }
+
+    compile_statement(c);
+    emit_loop(c, loop_start);
+
+    if exit_jump != -1
+    {
+        patch_jump(c, exit_jump);
+        emit_byte(c, xx OpCode.POP);
+    }
+
 }
 
 compile_expression :: (c: *Compiler)
@@ -197,7 +306,7 @@ compile_unary :: (c: *Compiler, can_assign: bool)
     }
 }
 
-compile_binary :: (c: *Compiler)
+compile_binary :: (c: *Compiler, can_assign: bool)
 {
     operator_type: = c.previous.type;
     rule: = get_rule(operator_type);
@@ -219,6 +328,28 @@ compile_binary :: (c: *Compiler)
     }
 }
 
+compile_and :: (c: *Compiler, can_assign: bool)
+{
+    end_jump: = emit_jump(c, .JUMP_IF_FALSE);
+    emit_byte(c, xx OpCode.POP);
+
+    parse_precedence(c, .AND);
+
+    patch_jump(c, end_jump);
+}
+
+compile_or :: (c: *Compiler, can_assign: bool)
+{
+    else_jump: = emit_jump(c, .JUMP_IF_FALSE);
+    end_jump: = emit_jump(c, .JUMP);
+
+    patch_jump(c, else_jump);
+    emit_byte(c, xx OpCode.POP);
+
+    parse_precedence(c, .AND);
+    patch_jump(c, end_jump);
+}
+
 #scope_file
 
 Precedence :: enum
@@ -236,12 +367,11 @@ Precedence :: enum
     PRIMARY;
 }
 
-PrefixParseFn :: #type (c: *Compiler, can_assign: bool);
-ParseFn :: #type (c: *Compiler);
+ParseFn :: #type (c: *Compiler, can_assign: bool);
 
 ParseRule :: struct
 {
-    prefix: PrefixParseFn;
+    prefix: ParseFn;
     infix: ParseFn;
     precedence: Precedence;
 }
@@ -275,7 +405,7 @@ rules :: ParseRule.[
     .{compile_variable,  null,               .NONE},         // IDENTIFIER;
     .{compile_string,    null,               .NONE},         // STRING;
     .{compile_number,    null,               .NONE},         // NUMBER;
-    .{null,              null,               .NONE},         // AND;
+    .{null,              compile_and,        .AND},          // AND;
     .{null,              null,               .NONE},         // CLASS;
     .{null,              null,               .NONE},         // ELSE;
     .{compile_literal,   null,               .NONE},         // FALSE;
@@ -283,7 +413,7 @@ rules :: ParseRule.[
     .{null,              null,               .NONE},         // FUN;
     .{null,              null,               .NONE},         // IF;
     .{compile_literal,   null,               .NONE},         // NIL;
-    .{null,              null,               .NONE},         // OR;
+    .{null,              compile_or,         .OR},           // OR;
     .{null,              null,               .NONE},         // PRINT;
     .{null,              null,               .NONE},         // RETURN;
     .{null,              null,               .NONE},         // SUPER;
@@ -319,6 +449,37 @@ emit_bytes :: (c: *Compiler, byte1: u8, byte2: u8)
 emit_constant :: (c: *Compiler, value: Value)
 {
     emit_bytes(c, xx OpCode.CONSTANT, make_constant(c, value));
+}
+
+emit_jump :: (c: *Compiler, instruction: OpCode) -> int
+{
+    address: = c.compiling_chunk.code.count;
+    emit_byte(c, xx instruction);
+    emit_byte(c, 0xff);
+    emit_byte(c, 0xff);
+    return address;
+}
+
+emit_loop :: (c: *Compiler, loop_start: int)
+{
+    offset: = c.compiling_chunk.code.count - loop_start + 3;
+    emit_byte(c, xx OpCode.LOOP);
+    emit_byte(c, 0xff);
+    emit_byte(c, 0xff);
+    (c.compiling_chunk.code.data + c.compiling_chunk.code.count-2).(*u16).* = offset.(u16);
+}
+
+
+patch_jump :: (c: *Compiler, jump_instruction_address: int)
+{
+    // ip will already be past the jump instruction (3 bytes) when we jump, so we offset the jump size by that.
+    jump: = c.compiling_chunk.code.count - jump_instruction_address - 3;
+    if jump > U16_MAX
+    {
+        error(c, "Too much code to jump over.");
+    }
+
+    (c.compiling_chunk.code.data + jump_instruction_address + 1).(*u16).* = jump.(u16);
 }
 
 make_constant :: (c: *Compiler, value: Value) -> u8
@@ -380,7 +541,7 @@ parse_precedence :: (c: *Compiler, precedence: Precedence)
     {
         advance(c);
         infix: = get_rule(c.previous.type).infix;
-        infix(c);
+        infix(c, can_assign);
     }
 
     if can_assign && try_consume(c, .EQUAL)

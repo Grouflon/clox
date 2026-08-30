@@ -4,5 +4,12 @@ target:
 {
   executable: "clox.exe"
   working_directory: ""
+  enabled: 0
+}
+target:
+{
+  executable: "clox.exe"
+  working_directory: ""
   enabled: 1
+  arguments: "test.lox"
 }

@@ -70,6 +70,13 @@ run :: (vm: *VM) -> InterpretResult
         return byte;
     }
 
+    read_short :: (vm: *VM) -> u16
+    {
+        byte: = vm.ip.(*u16).*;
+        vm.ip += 2;
+        return byte;
+    }
+
     read_constant :: (vm: *VM) -> Value
     {
         return vm.chunk.constants[read_byte(vm)];
@@ -209,6 +216,21 @@ run :: (vm: *VM) -> InterpretResult
             {
                 slot: = read_byte(vm);
                 vm.stack[slot] = peek(vm);
+            }
+            case .JUMP_IF_FALSE;
+            {
+                offset: = read_short(vm);
+                if is_falsey(peek(vm)) vm.ip += offset;
+            }
+            case .JUMP;
+            {
+                offset: = read_short(vm);
+                vm.ip += offset;
+            }
+            case .LOOP;
+            {
+                offset: = read_short(vm);
+                vm.ip -= offset;
             }
 
             case .RETURN;

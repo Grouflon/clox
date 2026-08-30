@@ -22,6 +22,9 @@ OpCode :: enum u8
     SET_GLOBAL;
     GET_LOCAL;
     SET_LOCAL;
+    JUMP_IF_FALSE;
+    JUMP;
+    LOOP;
 }
 
 LineInfo :: struct
@@ -111,6 +114,9 @@ disassemble_instruction :: (chunk: *Chunk, offset: int) -> int
         case .SET_GLOBAL; return constant_instruction("SET_GLOBAL", chunk, offset);
         case .GET_LOCAL; return constant_instruction("GET_LOCAL", chunk, offset);
         case .SET_LOCAL; return constant_instruction("SET_LOCAL", chunk, offset);
+        case .JUMP_IF_FALSE; return jump_instruction("JUMP_IF_FALSE", 1, chunk, offset);
+        case .JUMP; return jump_instruction("JUMP", 1, chunk, offset);
+        case .LOOP; return jump_instruction("LOOP", -1, chunk, offset);
         case;
         {
             print("Unknown OpCode: %", formatInt(instruction.(u8), 16, 2));
@@ -130,6 +136,13 @@ simple_instruction :: (name: string, offset: int) -> int
 {
     print("%", name);
     return offset+1;
+}
+
+jump_instruction :: (name: string, sign: int, chunk: *Chunk, offset: int) -> int
+{
+    jump: = (chunk.code.data + offset + 1).(*u16).*;
+    print("% % -> %", tprint_fixed_length_string(name, 16), formatInt(offset, 16, 2), formatInt(offset + 3 + sign * jump, 16, 2));
+    return offset+3;
 }
 
 add_constant :: (chunk: *Chunk, constant: Value) -> int
