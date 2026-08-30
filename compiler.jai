@@ -5,6 +5,11 @@ Compiler :: struct
     compiling_chunk: *Chunk;
     previous: Token;
     current: Token;
+
+    locals: [U8_MAX+1]Local;
+    local_count: int;
+    scope_depth: int;
+
     panic_mode: bool;
     had_error: bool;
 }
@@ -20,7 +25,7 @@ compile :: (source: string, chunk: *Chunk) -> bool
 
     while !try_consume(c, .EOF)
     {
-        compile_declaration(c);
+        compile_declaration_statement(c);
     }
 
     end_compiler(c);
@@ -28,7 +33,7 @@ compile :: (source: string, chunk: *Chunk) -> bool
     return !c.had_error;
 }
 
-compile_declaration :: (c: *Compiler)
+compile_declaration_statement :: (c: *Compiler)
 {
     if try_consume(c, .VAR)
     {
@@ -50,6 +55,12 @@ compile_statement :: (c: *Compiler)
     if try_consume(c, .PRINT)
     {
         compile_print_statement(c);
+    }
+    else if try_consume(c, .LEFT_BRACE)
+    {
+        begin_scope(c);
+        compile_block_statement(c);
+        end_scope(c);
     }
     else
     {
@@ -86,6 +97,16 @@ compile_expression_statement :: (c: *Compiler)
     compile_expression(c);
     consume(c, .SEMICOLON, "Expect ';' after value.");
     emit_byte(c, xx OpCode.POP);
+}
+
+compile_block_statement :: (c: *Compiler)
+{
+    while c.current.type != .RIGHT_BRACE && c.current.type != .EOF
+    {
+        compile_declaration_statement(c);
+    }
+
+    consume(c, .RIGHT_BRACE, "Expect '}' after block.");
 }
 
 compile_expression :: (c: *Compiler)
@@ -131,16 +152,29 @@ compile_variable :: (c: *Compiler, can_assign: bool)
 
 compile_named_variable :: (c: *Compiler, name: Token, can_assign: bool)
 {
-    arg: = identifier_constant(c, name);
+    get_op, set_op: OpCode;
+    arg: = resolve_local(c, name);
+
+    if arg != -1
+    {
+        get_op = .GET_LOCAL;
+        set_op = .SET_LOCAL;
+    }
+    else
+    {
+        arg = identifier_constant(c, name);
+        get_op = .GET_GLOBAL;
+        set_op = .SET_GLOBAL;
+    }
 
     if can_assign && try_consume(c, .EQUAL)
     {
         compile_expression(c);
-        emit_bytes(c, xx OpCode.SET_GLOBAL, arg);
+        emit_bytes(c, xx set_op, xx arg);
     }
     else
     {
-        emit_bytes(c, xx OpCode.GET_GLOBAL, arg);
+        emit_bytes(c, xx get_op, xx arg);
     }
 }
 
@@ -210,6 +244,12 @@ ParseRule :: struct
     prefix: PrefixParseFn;
     infix: ParseFn;
     precedence: Precedence;
+}
+
+Local :: struct
+{
+    name: Token;
+    depth: int;
 }
 
 rules :: ParseRule.[
@@ -352,17 +392,91 @@ parse_precedence :: (c: *Compiler, precedence: Precedence)
 parse_variable :: (c: *Compiler, message: string) -> u8
 {
     consume(c, .IDENTIFIER, message);
+
+    declare_variable(c);
+    if c.scope_depth > 0 return 0;
+
     return identifier_constant(c, c.previous);
 }
 
 define_variable :: (c: *Compiler, global: u8)
 {
+    if c.scope_depth > 0
+    {
+        c.locals[c.local_count-1].depth = c.scope_depth;
+        return;
+    }
+
     emit_bytes(c, xx OpCode.DEFINE_GLOBAL, global);
+}
+
+declare_variable :: (c: *Compiler)
+{
+    if c.scope_depth == 0 return;
+
+    name: = c.previous;
+    for < i: 0..c.local_count-1
+    {
+        local: = *c.locals[i];
+        if local.depth != -1 && local.depth < c.scope_depth break;
+
+        if name.lexeme == local.name.lexeme
+        {
+            error(c, "Already a variable with this name in this scope.");
+        }
+    }
+
+    add_local(c, name);
 }
 
 identifier_constant :: (c: *Compiler, name: Token) -> u8
 {
     return make_constant(c, obj_string_value(name.lexeme));
+}
+
+add_local :: (c: *Compiler, name: Token)
+{
+    if c.local_count == c.locals.count
+    {
+        error(c, "Too many local variables in function.");
+        return;
+    }
+
+    local: = *c.locals[c.local_count];
+    local.name = name;
+    local.depth = -1; // uninitialized by default
+
+    c.local_count += 1;
+}
+
+resolve_local :: (c: *Compiler, name: Token) -> int
+{
+    for < i: 0..c.local_count-1
+    {
+        local: = *c.locals[i];
+        if local.name.lexeme == name.lexeme && local.depth != -1
+        {
+            return i;
+        }
+    }
+    return -1;
+}
+
+begin_scope :: (c: *Compiler)
+{
+    c.scope_depth += 1;
+}
+
+end_scope :: (c: *Compiler)
+{
+    assert(c.scope_depth > 0);
+    c.scope_depth -= 1;
+
+    while c.local_count > 0 && c.locals[c.local_count-1].depth > c.scope_depth
+    {
+        emit_byte(c, xx OpCode.POP);
+        c.local_count -= 1;
+    }
 }
 
 end_compiler :: (c: *Compiler)

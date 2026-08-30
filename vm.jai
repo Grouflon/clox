@@ -200,6 +200,16 @@ run :: (vm: *VM) -> InterpretResult
                 table_set(*vm.globals, name, peek(vm));
                 // push(vm, value);
             }
+            case .GET_LOCAL;
+            {
+                slot: = read_byte(vm);
+                push(vm, vm.stack[slot]);
+            }
+            case .SET_LOCAL;
+            {
+                slot: = read_byte(vm);
+                vm.stack[slot] = peek(vm);
+            }
 
             case .RETURN;
             {

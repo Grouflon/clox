@@ -20,6 +20,8 @@ OpCode :: enum u8
     DEFINE_GLOBAL;
     GET_GLOBAL;
     SET_GLOBAL;
+    GET_LOCAL;
+    SET_LOCAL;
 }
 
 LineInfo :: struct
@@ -107,6 +109,8 @@ disassemble_instruction :: (chunk: *Chunk, offset: int) -> int
         case .DEFINE_GLOBAL; return constant_instruction("DEFINE_GLOBAL", chunk, offset);
         case .GET_GLOBAL; return constant_instruction("GET_GLOBAL", chunk, offset);
         case .SET_GLOBAL; return constant_instruction("SET_GLOBAL", chunk, offset);
+        case .GET_LOCAL; return constant_instruction("GET_LOCAL", chunk, offset);
+        case .SET_LOCAL; return constant_instruction("SET_LOCAL", chunk, offset);
         case;
         {
             print("Unknown OpCode: %", formatInt(instruction.(u8), 16, 2));
