@@ -67,15 +67,14 @@ repl :: ()
         
         if (line.count == 1 && line[0] == 0x4) || line == "exit" break;
 
-        chunk: Chunk;
-        init(*chunk);
-        defer shutdown(*chunk);
-        if !compile(line, *chunk)
+        compiler: Compiler;
+        f: = compile(*compiler, line);
+        if f == null
         {
             continue;
         }
 
-        interpret(*vm, *chunk);
+        interpret(*vm, f);
     }
     
 }
@@ -92,12 +91,10 @@ run_file :: (path: string) -> InterpretResult
         return .COMPILE_ERROR;
     }
 
-    chunk: Chunk;
-    init(*chunk);
-    defer shutdown(*chunk);
-
     // Compile
-    if !compile(data, *chunk)
+    compiler: Compiler;
+    f: = compile(*compiler, data);
+    if f == null
     {
         return .COMPILE_ERROR;
     }
@@ -106,7 +103,7 @@ run_file :: (path: string) -> InterpretResult
     vm: VM;
     init(*vm);
     defer shutdown(*vm);
-    return interpret(*vm, *chunk);
+    return interpret(*vm, f);
 }
 
 #scope_file

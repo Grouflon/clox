@@ -1,12 +1,22 @@
-STACK_SIZE :: 256;
+FRAMES_MAX :: 64;
+STACK_MAX :: FRAMES_MAX * 256;
 
 VM :: struct
 {
-    chunk: *Chunk;
-    ip: *u8;
-    stack: [STACK_SIZE]Value;
+    frames: [FRAMES_MAX]CallFrame;
+    frame_count: int;
+
+    stack: [STACK_MAX]Value;
     sp: *Value;
+
     globals: Table(*ObjString, Value);
+}
+
+CallFrame :: struct
+{
+    function: *ObjFunction;
+    ip: *u8;
+    slots: *Value;
 }
 
 init :: (vm: *VM)
@@ -26,12 +36,18 @@ InterpretResult :: enum
     RUNTIME_ERROR;
 }
 
-interpret :: (vm: *VM, chunk: *Chunk) -> InterpretResult
+interpret :: (vm: *VM, function: *ObjFunction) -> InterpretResult
 {
-    assert(chunk != null);
+    assert(function != null);
 
-    vm.chunk = chunk;
-    vm.ip = chunk.code.data;
+    push(vm, obj_value(function));
+    frame: = *vm.frames[vm.frame_count];
+    frame.function = function;
+    frame.ip = function.chunk.code.data;
+    frame.slots = vm.stack.data;
+
+    vm.frame_count += 1;
+
     return run(vm);
 }
 
@@ -63,28 +79,28 @@ reset_stack :: (vm: *VM)
 
 run :: (vm: *VM) -> InterpretResult
 {
-    read_byte :: (vm: *VM) -> u8
+    read_byte :: (frame: *CallFrame) -> u8
     {
-        byte: = vm.ip.*;
-        vm.ip += 1;
+        byte: = frame.ip.*;
+        frame.ip += 1;
         return byte;
     }
 
-    read_short :: (vm: *VM) -> u16
+    read_short :: (frame: *CallFrame) -> u16
     {
-        byte: = vm.ip.(*u16).*;
-        vm.ip += 2;
+        byte: = frame.ip.(*u16).*;
+        frame.ip += 2;
         return byte;
     }
 
-    read_constant :: (vm: *VM) -> Value
+    read_constant :: (frame: *CallFrame) -> Value
     {
-        return vm.chunk.constants[read_byte(vm)];
+        return frame.function.chunk.constants[read_byte(frame)];
     }
 
-    read_string :: (vm: *VM) -> *ObjString
+    read_string :: (frame: *CallFrame) -> *ObjString
     {
-        value: = read_constant(vm);
+        value: = read_constant(frame);
         assert(value.type == .OBJ);
         assert(value.obj.type == .STRING);
         return value.obj.(*ObjString);
@@ -105,6 +121,7 @@ run :: (vm: *VM) -> InterpretResult
         push(vm, make_value(result));
     }
 
+    frame: = current_frame(vm);
     while true
     {
         #if DEBUG_TRACE_EXECUTION
@@ -117,15 +134,15 @@ run :: (vm: *VM) -> InterpretResult
                 sp += 1;
             }
             print("\n");
-            disassemble_instruction(vm.chunk, vm.ip - vm.chunk.code.data);
+            disassemble_instruction(*frame.function.chunk, frame.ip - frame.function.chunk.code.data);
         }
 
-        instruction: OpCode = xx read_byte(vm);
+        instruction: OpCode = xx read_byte(frame);
         if #complete instruction == 
         {
             case .CONSTANT;
             {
-                constant: = read_constant(vm);
+                constant: = read_constant(frame);
                 push(vm, constant);
             }
             case .NIL; push(vm, nil_value());
@@ -180,13 +197,13 @@ run :: (vm: *VM) -> InterpretResult
             }
             case .DEFINE_GLOBAL;
             {
-                name: = read_string(vm);
+                name: = read_string(frame);
                 value: = pop(vm);
                 table_set(*vm.globals, name, value);
             }
             case .GET_GLOBAL;
             {
-                name: = read_string(vm);
+                name: = read_string(frame);
                 found, value: = table_find(*vm.globals, name);
                 if !found
                 {
@@ -197,7 +214,7 @@ run :: (vm: *VM) -> InterpretResult
             }
             case .SET_GLOBAL;
             {
-                name: = read_string(vm);
+                name: = read_string(frame);
                 found, value: = table_find(*vm.globals, name);
                 if !found
                 {
@@ -209,32 +226,33 @@ run :: (vm: *VM) -> InterpretResult
             }
             case .GET_LOCAL;
             {
-                slot: = read_byte(vm);
-                push(vm, vm.stack[slot]);
+                slot: = read_byte(frame);
+                push(vm, frame.slots[slot]);
             }
             case .SET_LOCAL;
             {
-                slot: = read_byte(vm);
-                vm.stack[slot] = peek(vm);
+                slot: = read_byte(frame);
+                frame.slots[slot] = peek(vm);
             }
             case .JUMP_IF_FALSE;
             {
-                offset: = read_short(vm);
-                if is_falsey(peek(vm)) vm.ip += offset;
+                offset: = read_short(frame);
+                if is_falsey(peek(vm)) frame.ip += offset;
             }
             case .JUMP;
             {
-                offset: = read_short(vm);
-                vm.ip += offset;
+                offset: = read_short(frame);
+                frame.ip += offset;
             }
             case .LOOP;
             {
-                offset: = read_short(vm);
-                vm.ip -= offset;
+                offset: = read_short(frame);
+                frame.ip -= offset;
             }
 
             case .RETURN;
             {
+                pop(vm);
                 return .OK;
             }
             case .NOP;
@@ -249,8 +267,17 @@ runtime_error :: (vm: *VM, message: string)
 {
     log_error(message);
 
-    instruction: = vm.ip - vm.chunk.code.data - 1;
-    line: = get_line(vm.chunk, instruction);
+    frame: = current_frame(vm);
+    instruction: = frame.ip - frame.function.chunk.code.data - 1;
+    line: = get_line(*frame.function.chunk, instruction);
     log_error("[line %] in script", line);
     reset_stack(vm);
+}
+
+#scope_file
+
+current_frame :: (vm: *VM) -> *CallFrame
+{
+    assert(vm.frame_count > 0);
+    return *vm.frames[vm.frame_count-1];
 }

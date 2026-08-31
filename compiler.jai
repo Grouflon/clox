@@ -2,9 +2,11 @@ Compiler :: struct
 {
     scanner: Scanner;
 
-    compiling_chunk: *Chunk;
     previous: Token;
     current: Token;
+
+    function: *ObjFunction;
+    function_type: FunctionType;
 
     locals: [U8_MAX+1]Local;
     local_count: int;
@@ -14,12 +16,16 @@ Compiler :: struct
     had_error: bool;
 }
 
-compile :: (source: string, chunk: *Chunk) -> bool
+compile :: (c: *Compiler, source: string) -> *ObjFunction
 {
-    compiler: Compiler;
-    c: = *compiler;
+    c.function = xx obj_function_value().obj;
+    c.function_type = .SCRIPT;
 
-    c.compiling_chunk = chunk;
+    local: = *c.locals[c.local_count];
+    local.name = .{ type = .IDENTIFIER, lexeme = "" };
+    local.depth = 0;
+    c.local_count += 1;
+
     scanner_init(*c.scanner, source);
     advance(c);
 
@@ -30,7 +36,7 @@ compile :: (source: string, chunk: *Chunk) -> bool
 
     end_compiler(c);
     
-    return !c.had_error;
+    return ifx !c.had_error then c.function else null;
 }
 
 compile_declaration_statement :: (c: *Compiler)
@@ -142,7 +148,7 @@ compile_if_statement :: (c: *Compiler)
 
 compile_while_statement :: (c: *Compiler)
 {
-    loop_start: = c.compiling_chunk.code.count;
+    loop_start: = current_chunk(c).code.count;
 
     consume(c, .LEFT_PAREN, "Expect '(' after 'while'.");
     compile_expression(c);
@@ -179,7 +185,7 @@ compile_for_statement :: (c: *Compiler)
         compile_expression_statement(c);
     }
 
-    loop_start: = c.compiling_chunk.code.count;
+    loop_start: = current_chunk(c).code.count;
     exit_jump: = -1;
 
     // Condition clause
@@ -197,7 +203,7 @@ compile_for_statement :: (c: *Compiler)
     {
         body_jump: = emit_jump(c, .JUMP);
 
-        increment_start: = c.compiling_chunk.code.count;
+        increment_start: = current_chunk(c).code.count;
         compile_expression(c);
         emit_byte(c, xx OpCode.POP);
         consume(c, .RIGHT_PAREN, "Expect ')' after for clauses.");
@@ -382,6 +388,12 @@ Local :: struct
     depth: int;
 }
 
+FunctionType :: enum
+{
+    FUNCTION;
+    SCRIPT;
+}
+
 rules :: ParseRule.[
     .{compile_grouping,  null,               .NONE},         // LEFT_PAREN;
     .{null,              null,               .NONE},         // RIGHT_PAREN;
@@ -432,7 +444,7 @@ get_rule :: (type: TokenType) -> ParseRule
 
 current_chunk :: (c: *Compiler) -> *Chunk
 {
-    return c.compiling_chunk;
+    return *c.function.chunk;
 }
 
 emit_byte :: (c: *Compiler, byte: u8)
@@ -453,7 +465,7 @@ emit_constant :: (c: *Compiler, value: Value)
 
 emit_jump :: (c: *Compiler, instruction: OpCode) -> int
 {
-    address: = c.compiling_chunk.code.count;
+    address: = current_chunk(c).code.count;
     emit_byte(c, xx instruction);
     emit_byte(c, 0xff);
     emit_byte(c, 0xff);
@@ -462,24 +474,24 @@ emit_jump :: (c: *Compiler, instruction: OpCode) -> int
 
 emit_loop :: (c: *Compiler, loop_start: int)
 {
-    offset: = c.compiling_chunk.code.count - loop_start + 3;
+    offset: = current_chunk(c).code.count - loop_start + 3;
     emit_byte(c, xx OpCode.LOOP);
     emit_byte(c, 0xff);
     emit_byte(c, 0xff);
-    (c.compiling_chunk.code.data + c.compiling_chunk.code.count-2).(*u16).* = offset.(u16);
+    (current_chunk(c).code.data + current_chunk(c).code.count-2).(*u16).* = offset.(u16);
 }
 
 
 patch_jump :: (c: *Compiler, jump_instruction_address: int)
 {
     // ip will already be past the jump instruction (3 bytes) when we jump, so we offset the jump size by that.
-    jump: = c.compiling_chunk.code.count - jump_instruction_address - 3;
+    jump: = current_chunk(c).code.count - jump_instruction_address - 3;
     if jump > U16_MAX
     {
         error(c, "Too much code to jump over.");
     }
 
-    (c.compiling_chunk.code.data + jump_instruction_address + 1).(*u16).* = jump.(u16);
+    (current_chunk(c).code.data + jump_instruction_address + 1).(*u16).* = jump.(u16);
 }
 
 make_constant :: (c: *Compiler, value: Value) -> u8
@@ -640,7 +652,7 @@ end_scope :: (c: *Compiler)
     }
 }
 
-end_compiler :: (c: *Compiler)
+end_compiler :: (c: *Compiler) -> *ObjFunction
 {
     emit_byte(c, xx OpCode.RETURN);
 
@@ -648,9 +660,11 @@ end_compiler :: (c: *Compiler)
     {
         if !c.had_error
         {
-            disassemble_chunk(current_chunk(c), "code");
+            disassemble_chunk(current_chunk(c), ifx c.function.name != null then c.function.name.str else "<script>");
         }
     }
+
+    return c.function;
 }
 
 synchronize :: (c: *Compiler)
