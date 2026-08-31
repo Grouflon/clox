@@ -22,6 +22,9 @@ CallFrame :: struct
 init :: (vm: *VM)
 {
     reset_stack(vm);
+    
+    base_time = current_time_consensus();
+    define_native(vm, "clock", clock_native);
 }
 
 shutdown :: (vm: *VM)
@@ -99,6 +102,15 @@ call_value :: (vm: *VM, callee: Value, arg_count: u8) -> bool
             case .FUNCTION;
             {
                 return call(vm, as_obj_function(callee), arg_count);
+            }
+
+            case .NATIVE;
+            {
+                native: = as_obj_native(callee);
+                result: = native.function(arg_count, vm.sp - arg_count);
+                vm.sp -= arg_count+1;
+                push(vm, result);
+                return true;
             }
         }
     }
@@ -333,10 +345,25 @@ runtime_error :: (vm: *VM, message: string)
     reset_stack(vm);
 }
 
+define_native :: (vm: *VM, name: string, function: NativeFn)
+{
+    push(vm, obj_string_value(name));
+    push(vm, obj_native_value(function));
+    table_set(*vm.globals, as_obj_string(peek(vm, 1)), peek(vm, 0));
+    pop(vm);
+    pop(vm);
+}
+
 #scope_file
 
 current_frame :: (vm: *VM) -> *CallFrame
 {
     assert(vm.frame_count > 0);
     return *vm.frames[vm.frame_count-1];
+}
+
+base_time: Apollo_Time;
+clock_native :: (arg_count: int, args: *Value) -> Value
+{
+    return number_value(to_microseconds(current_time_consensus() - base_time).(float) / 1_000_000);
 }

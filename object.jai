@@ -5,6 +5,7 @@ ObjType :: enum
 {
     STRING;
     FUNCTION;
+    NATIVE;
 }
 
 Obj :: struct
@@ -31,12 +32,21 @@ ObjFunction :: struct
     arity: int;
     chunk: Chunk;
     name: *ObjString;
+}
 
+NativeFn :: #type (arg_count: int, args: *Value) -> Value;
+
+ObjNative :: struct
+{
+    #as using base: Obj;
+    type = .NATIVE;
+
+    function: NativeFn;
 }
 
 shutdown :: (obj :*Obj)
 {
-    if #complete obj.type ==
+    if obj.type ==
     {
         case .STRING; free(obj.(*ObjString).str);
         case .FUNCTION; shutdown(*obj.(*ObjFunction).chunk);
@@ -64,6 +74,7 @@ object_to_string :: (obj: *Obj) -> string
     {
         case .STRING; return obj.(*ObjString).str;
         case .FUNCTION; return ifx obj.(*ObjFunction).name != null then tprint("<fn %>",  obj.(*ObjFunction).name.str) else "<script>";
+        case .NATIVE; return tprint("<native fn %>", obj.(*ObjNative).function);
     }
     return "";
 }
@@ -90,6 +101,13 @@ is_function :: (value: Value) -> bool
     if value.type != .OBJ return false;
     if value.obj == null return false;
     return value.obj.type == .FUNCTION;
+}
+
+is_native :: (value: Value) -> bool
+{
+    if value.type != .OBJ return false;
+    if value.obj == null return false;
+    return value.obj.type == .NATIVE;
 }
 
 new_object :: ($T: Type) -> *T
@@ -134,6 +152,13 @@ obj_function_value :: () -> Value
     return obj_value(obj);
 }
 
+obj_native_value :: (function: NativeFn) -> Value
+{
+    obj: = new_object(ObjNative);
+    obj.function = function;
+    return obj_value(obj);
+}
+
 as_obj_string :: (value: Value) -> *ObjString
 {
     assert(is_string(value));
@@ -144,6 +169,12 @@ as_obj_function :: (value: Value) -> *ObjFunction
 {
     assert(is_function(value));
     return value.obj.(*ObjFunction);
+}
+
+as_obj_native :: (value: Value) -> *ObjNative
+{
+    assert(is_native(value));
+    return value.obj.(*ObjNative);
 }
 
 #scope_file

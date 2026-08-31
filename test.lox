@@ -1,3 +1,5 @@
+var c0 = clock();
+
 fun areWeHavingItYet() {
   print "Yes we are!";
 }
@@ -13,3 +15,10 @@ fun c() {
 }
 
 // a();
+var c1 = clock();
+var c2 = clock();
+var c3 = clock();
+
+print c1 - c0;
+print c2 - c0;
+print c3 - c0;
