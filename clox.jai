@@ -67,8 +67,11 @@ repl :: ()
         
         if (line.count == 1 && line[0] == 0x4) || line == "exit" break;
 
+        tokenizer: Tokenizer;
+        tokenizer_init(*tokenizer, line);
+
         compiler: Compiler;
-        f: = compile(*compiler, line);
+        f: = compile(*compiler, *tokenizer);
         if f == null
         {
             continue;
@@ -92,8 +95,11 @@ run_file :: (path: string) -> InterpretResult
     }
 
     // Compile
+    tokenizer: Tokenizer;
+    tokenizer_init(*tokenizer, data);
+
     compiler: Compiler;
-    f: = compile(*compiler, data);
+    f: = compile(*compiler, *tokenizer);
     if f == null
     {
         return .COMPILE_ERROR;

@@ -25,6 +25,7 @@ OpCode :: enum u8
     JUMP_IF_FALSE;
     JUMP;
     LOOP;
+    CALL;
 }
 
 LineInfo :: struct
@@ -117,6 +118,7 @@ disassemble_instruction :: (chunk: *Chunk, offset: int) -> int
         case .JUMP_IF_FALSE; return jump_instruction("JUMP_IF_FALSE", 1, chunk, offset);
         case .JUMP; return jump_instruction("JUMP", 1, chunk, offset);
         case .LOOP; return jump_instruction("LOOP", -1, chunk, offset);
+        case .CALL; return byte_instruction("CALL", chunk, offset);
         case;
         {
             print("Unknown OpCode: %", formatInt(instruction.(u8), 16, 2));
@@ -136,6 +138,13 @@ simple_instruction :: (name: string, offset: int) -> int
 {
     print("%", name);
     return offset+1;
+}
+
+byte_instruction :: (name: string, chunk: *Chunk, offset: int) -> int
+{
+    byte: = chunk.code[offset + 1];
+    print("% %", tprint_fixed_length_string(name, 16), byte);
+    return offset+2;
 }
 
 jump_instruction :: (name: string, sign: int, chunk: *Chunk, offset: int) -> int

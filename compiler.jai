@@ -1,9 +1,19 @@
-Compiler :: struct
+Tokenizer :: struct
 {
     scanner: Scanner;
-
     previous: Token;
     current: Token;
+}
+
+tokenizer_init :: (t: *Tokenizer, source: string)
+{
+    scanner_init(*t.scanner, source);
+    advance(t);
+}
+
+Compiler :: struct
+{
+    tokenizer: *Tokenizer;
 
     function: *ObjFunction;
     function_type: FunctionType;
@@ -16,32 +26,27 @@ Compiler :: struct
     had_error: bool;
 }
 
-compile :: (c: *Compiler, source: string) -> *ObjFunction
+compile :: (c: *Compiler, tokenizer: *Tokenizer) -> *ObjFunction
 {
-    c.function = xx obj_function_value().obj;
-    c.function_type = .SCRIPT;
-
-    local: = *c.locals[c.local_count];
-    local.name = .{ type = .IDENTIFIER, lexeme = "" };
-    local.depth = 0;
-    c.local_count += 1;
-
-    scanner_init(*c.scanner, source);
-    advance(c);
+    begin_compiler(c, tokenizer, .SCRIPT);
 
     while !try_consume(c, .EOF)
     {
         compile_declaration_statement(c);
     }
 
-    end_compiler(c);
+    f: = end_compiler(c);
     
-    return ifx !c.had_error then c.function else null;
+    return ifx !c.had_error then f else null;
 }
 
 compile_declaration_statement :: (c: *Compiler)
 {
-    if try_consume(c, .VAR)
+    if try_consume(c, .FUN)
+    {
+        compile_fun_statement(c);
+    }
+    else if try_consume(c, .VAR)
     {
         compile_var_statement(c);
     }
@@ -72,6 +77,10 @@ compile_statement :: (c: *Compiler)
     {
         compile_if_statement(c);
     }
+    else if try_consume(c, .RETURN)
+    {
+        compile_return_statement(c);
+    }
     else if try_consume(c, .WHILE)
     {
         compile_while_statement(c);
@@ -84,6 +93,16 @@ compile_statement :: (c: *Compiler)
     {
         compile_expression_statement(c);
     }
+}
+
+compile_fun_statement :: (c: *Compiler)
+{
+    global: = parse_variable(c, "Expect variable name.");
+    mark_local_initialized(c); // allow the function to reference itself
+
+    compile_function(c, .FUNCTION);
+
+    define_variable(c, global);
 }
 
 compile_var_statement :: (c: *Compiler)
@@ -110,6 +129,25 @@ compile_print_statement :: (c: *Compiler)
     emit_byte(c, xx OpCode.PRINT);
 }
 
+compile_return_statement :: (c: *Compiler)
+{
+    if c.function_type == .SCRIPT
+    {
+        error(c, "Can't return from top-level code.");
+    }
+
+    if try_consume(c, .SEMICOLON)
+    {
+        emit_return(c);
+    }
+    else
+    {
+        compile_expression(c);
+        consume(c, .SEMICOLON, "Expect ';' after return value");
+        emit_byte(c, xx OpCode.RETURN);
+    }
+}
+
 compile_expression_statement :: (c: *Compiler)
 {
     compile_expression(c);
@@ -119,7 +157,7 @@ compile_expression_statement :: (c: *Compiler)
 
 compile_block_statement :: (c: *Compiler)
 {
-    while c.current.type != .RIGHT_BRACE && c.current.type != .EOF
+    while current_token(c).type != .RIGHT_BRACE && current_token(c).type != .EOF
     {
         compile_declaration_statement(c);
     }
@@ -221,7 +259,40 @@ compile_for_statement :: (c: *Compiler)
         patch_jump(c, exit_jump);
         emit_byte(c, xx OpCode.POP);
     }
+}
 
+compile_function :: (parent_compiler: *Compiler, type: FunctionType)
+{
+    compiler: Compiler;
+    c: = *compiler;
+    begin_compiler(c, parent_compiler.tokenizer, type);
+    begin_scope(c); // no need to end scope, compiler will disappear just after
+
+    consume(c, .LEFT_PAREN, "Expect '(' after function name.");
+    if current_token(c).type != .RIGHT_PAREN
+    {
+        while true
+        {
+            c.function.arity += 1;
+            if c.function.arity > 255
+            {
+                error_at_current(c, "Can't have more than 255 parameters.");
+            }
+            constant: = parse_variable(c, "Expect parameter name");
+            define_variable(c, constant);
+
+            if !try_consume(c, .COMMA) break;
+        }
+
+    }
+    consume(c, .RIGHT_PAREN, "Expect ')' after parameters.");
+    consume(c, .LEFT_BRACE, "Expect '{' before function body.");
+
+    compile_block_statement(c);
+
+    f: = end_compiler(c);
+    c = parent_compiler;
+    emit_bytes(c, xx OpCode.CONSTANT, make_constant(c, obj_value(f)));
 }
 
 compile_expression :: (c: *Compiler)
@@ -231,15 +302,15 @@ compile_expression :: (c: *Compiler)
 
 compile_number :: (c: *Compiler, can_assign: bool)
 {
-    assert(c.previous.type == .NUMBER);
+    assert(previous_token(c).type == .NUMBER);
 
-    number: = string_to_float64(c.previous.lexeme);
+    number: = string_to_float64(previous_token(c).lexeme);
     emit_constant(c, number_value(number));
 }
 
 compile_literal :: (c: *Compiler, can_assign: bool)
 {
-    if c.previous.type ==
+    if previous_token(c).type ==
     {
         case .FALSE; emit_byte(c, xx OpCode.FALSE);
         case .NIL; emit_byte(c, xx OpCode.NIL);
@@ -250,9 +321,9 @@ compile_literal :: (c: *Compiler, can_assign: bool)
 
 compile_string :: (c: *Compiler, can_assign: bool)
 {
-    assert(c.previous.type == .STRING);
+    assert(previous_token(c).type == .STRING);
 
-    str: = c.previous.lexeme;
+    str: = previous_token(c).lexeme;
     // strip quotes
     str.data += 1;
     str.count -= 2;
@@ -262,7 +333,7 @@ compile_string :: (c: *Compiler, can_assign: bool)
 
 compile_variable :: (c: *Compiler, can_assign: bool)
 {
-    compile_named_variable(c, c.previous, can_assign);
+    compile_named_variable(c, previous_token(c), can_assign);
 }
 
 compile_named_variable :: (c: *Compiler, name: Token, can_assign: bool)
@@ -301,7 +372,7 @@ compile_grouping :: (c: *Compiler, can_assign: bool)
 
 compile_unary :: (c: *Compiler, can_assign: bool)
 {
-    operator_type: = c.previous.type;
+    operator_type: = previous_token(c).type;
 
     parse_precedence(c, .UNARY);
 
@@ -314,7 +385,7 @@ compile_unary :: (c: *Compiler, can_assign: bool)
 
 compile_binary :: (c: *Compiler, can_assign: bool)
 {
-    operator_type: = c.previous.type;
+    operator_type: = previous_token(c).type;
     rule: = get_rule(operator_type);
     parse_precedence(c, rule.precedence + 1);
 
@@ -332,6 +403,34 @@ compile_binary :: (c: *Compiler, can_assign: bool)
         case .SLASH;         emit_byte(c, xx OpCode.DIVIDE);
         case;                return; // unreachable
     }
+}
+
+compile_call :: (c: *Compiler, can_assign: bool)
+{
+    arg_count: = argument_list(c);
+    emit_bytes(c, xx OpCode.CALL, arg_count);
+}
+
+argument_list :: (c: *Compiler) -> u8
+{
+    arg_count: u8;
+    if current_token(c).type != .RIGHT_PAREN
+    {
+        while true
+        {
+            compile_expression(c);
+            if arg_count == 255
+            {
+                error(c, "Can't have more than 255 arguments.");
+            }
+
+            arg_count += 1;
+
+            if !try_consume(c, .COMMA) break;
+        }
+    }
+    consume(c, .RIGHT_PAREN, "Expect ')' after arguments.");
+    return arg_count;
 }
 
 compile_and :: (c: *Compiler, can_assign: bool)
@@ -395,7 +494,7 @@ FunctionType :: enum
 }
 
 rules :: ParseRule.[
-    .{compile_grouping,  null,               .NONE},         // LEFT_PAREN;
+    .{compile_grouping,  compile_call,       .CALL},         // LEFT_PAREN;
     .{null,              null,               .NONE},         // RIGHT_PAREN;
     .{null,              null,               .NONE},         // LEFT_BRACE;
     .{null,              null,               .NONE},         // RIGHT_BRACE;
@@ -449,7 +548,7 @@ current_chunk :: (c: *Compiler) -> *Chunk
 
 emit_byte :: (c: *Compiler, byte: u8)
 {
-    write_chunk(current_chunk(c), byte, c.previous.line);
+    write_chunk(current_chunk(c), byte, previous_token(c).line);
 }
 
 emit_bytes :: (c: *Compiler, byte1: u8, byte2: u8)
@@ -481,6 +580,11 @@ emit_loop :: (c: *Compiler, loop_start: int)
     (current_chunk(c).code.data + current_chunk(c).code.count-2).(*u16).* = offset.(u16);
 }
 
+emit_return :: (c: *Compiler)
+{
+    emit_byte(c, xx OpCode.NIL);
+    emit_byte(c, xx OpCode.RETURN);
+}
 
 patch_jump :: (c: *Compiler, jump_instruction_address: int)
 {
@@ -505,29 +609,32 @@ make_constant :: (c: *Compiler, value: Value) -> u8
     return xx constant;
 }
 
+advance :: (t: *Tokenizer)
+{
+    t.previous = t.current;
+    t.current = scan_token(*t.scanner);
+}
+
 advance :: (c: *Compiler)
 {
-    c.previous = c.current;
+    advance(c.tokenizer);
 
-    while true
+    if current_token(c).type == .ERROR
     {
-        c.current = scan_token(*c.scanner);
-        if c.current.type != .ERROR break;
-
-        error_at_current(c, c.current.lexeme);
+        error_at_current(c);
     }
 }
 
 try_consume :: (c: *Compiler, type: TokenType) -> bool
 {
-    if c.current.type != type return false;
+    if current_token(c).type != type return false;
     advance(c);
     return true;
 }
 
 consume :: (c: *Compiler, type: TokenType, message: string)
 {
-    if c.current.type == type
+    if current_token(c).type == type
     {
         advance(c);
         return;
@@ -536,10 +643,20 @@ consume :: (c: *Compiler, type: TokenType, message: string)
     error_at_current(c, message);
 }
 
+current_token :: (c: *Compiler) -> Token
+{
+    return c.tokenizer.current;
+}
+
+previous_token :: (c: *Compiler) -> Token
+{
+    return c.tokenizer.previous;
+}
+
 parse_precedence :: (c: *Compiler, precedence: Precedence)
 {
     advance(c);
-    prefix: = get_rule(c.previous.type).prefix;
+    prefix: = get_rule(previous_token(c).type).prefix;
     if prefix == null
     {
         error(c, "Expect expression.");
@@ -549,10 +666,10 @@ parse_precedence :: (c: *Compiler, precedence: Precedence)
     can_assign: = precedence <= .ASSIGNMENT;
     prefix(c, can_assign);
 
-    while precedence <= get_rule(c.current.type).precedence
+    while precedence <= get_rule(current_token(c).type).precedence
     {
         advance(c);
-        infix: = get_rule(c.previous.type).infix;
+        infix: = get_rule(previous_token(c).type).infix;
         infix(c, can_assign);
     }
 
@@ -569,16 +686,13 @@ parse_variable :: (c: *Compiler, message: string) -> u8
     declare_variable(c);
     if c.scope_depth > 0 return 0;
 
-    return identifier_constant(c, c.previous);
+    return identifier_constant(c, previous_token(c));
 }
 
 define_variable :: (c: *Compiler, global: u8)
 {
-    if c.scope_depth > 0
-    {
-        c.locals[c.local_count-1].depth = c.scope_depth;
-        return;
-    }
+    mark_local_initialized(c);
+    if c.scope_depth > 0 return;
 
     emit_bytes(c, xx OpCode.DEFINE_GLOBAL, global);
 }
@@ -587,7 +701,7 @@ declare_variable :: (c: *Compiler)
 {
     if c.scope_depth == 0 return;
 
-    name: = c.previous;
+    name: = previous_token(c);
     for < i: 0..c.local_count-1
     {
         local: = *c.locals[i];
@@ -622,6 +736,12 @@ add_local :: (c: *Compiler, name: Token)
     c.local_count += 1;
 }
 
+mark_local_initialized :: (c: *Compiler)
+{
+    if c.scope_depth == 0 return;
+    c.locals[c.local_count-1].depth = c.scope_depth;
+}
+
 resolve_local :: (c: *Compiler, name: Token) -> int
 {
     for < i: 0..c.local_count-1
@@ -652,9 +772,32 @@ end_scope :: (c: *Compiler)
     }
 }
 
+begin_compiler :: (c: *Compiler, tokenizer: *Tokenizer, function_type: FunctionType)
+{
+    c.tokenizer = tokenizer;
+    if current_token(c).type == .ERROR
+    {
+        error_at_current(c);
+    }
+
+    c.function = xx obj_function_value().obj;
+    c.function_type = function_type;
+
+    local: = *c.locals[c.local_count];
+    local.name = .{ type = .IDENTIFIER, lexeme = "" };
+    local.depth = 0;
+    c.local_count += 1;
+
+    if c.function_type == .FUNCTION
+    {
+        assert(previous_token(c).type == .IDENTIFIER);
+        c.function.name = xx obj_string_value(previous_token(c).lexeme).obj;
+    }
+}
+
 end_compiler :: (c: *Compiler) -> *ObjFunction
 {
-    emit_byte(c, xx OpCode.RETURN);
+    emit_return(c);
 
     #if DEBUG_PRINT_CODE
     {
@@ -671,10 +814,10 @@ synchronize :: (c: *Compiler)
 {
     c.panic_mode = false;
 
-    while c.current.type != .EOF
+    while current_token(c).type != .EOF
     {
-        if c.previous.type == .SEMICOLON return;
-        if c.current.type ==
+        if previous_token(c).type == .SEMICOLON return;
+        if current_token(c).type ==
         {
             case .CLASS; #through;
             case .FUN; #through;
@@ -692,12 +835,17 @@ synchronize :: (c: *Compiler)
 
 error :: (c: *Compiler, message: string)
 {
-    error_at(c, c.previous, message);
+    error_at(c, previous_token(c), message);
+}
+
+error_at_current :: (c: *Compiler)
+{
+    error_at(c, current_token(c), current_token(c).lexeme);
 }
 
 error_at_current :: (c: *Compiler, message: string)
 {
-    error_at(c, c.current, message);
+    error_at(c, current_token(c), message);
 }
 
 error_at :: (c: *Compiler, token: Token, message: string)

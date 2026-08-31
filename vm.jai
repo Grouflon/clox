@@ -41,12 +41,7 @@ interpret :: (vm: *VM, function: *ObjFunction) -> InterpretResult
     assert(function != null);
 
     push(vm, obj_value(function));
-    frame: = *vm.frames[vm.frame_count];
-    frame.function = function;
-    frame.ip = function.chunk.code.data;
-    frame.slots = vm.stack.data;
-
-    vm.frame_count += 1;
+    call(vm, function, 0);
 
     return run(vm);
 }
@@ -70,6 +65,46 @@ peek :: (vm: *VM, distance: int = 0) -> Value
     assert(vm.sp > vm.stack.data);
 
     return vm.sp[-1 - distance];
+}
+
+call :: (vm: *VM, function: *ObjFunction, arg_count: u8) -> bool
+{
+    if arg_count != function.arity
+    {
+        runtime_error(vm, tprint("Expected % arguments but got %.", function.arity, arg_count));
+        return false;
+    }
+
+    if vm.frame_count == FRAMES_MAX
+    {
+        runtime_error(vm, "Stack overflow.");
+        return false;
+    }
+
+    frame: = *vm.frames[vm.frame_count];
+    vm.frame_count += 1;
+
+    frame.function = function;
+    frame.ip = frame.function.chunk.code.data;
+    frame.slots = vm.sp - arg_count - 1;
+    return true;
+}
+
+call_value :: (vm: *VM, callee: Value, arg_count: u8) -> bool
+{
+    if callee.type == .OBJ
+    {
+        if callee.obj.type ==
+        {
+            case .FUNCTION;
+            {
+                return call(vm, as_obj_function(callee), arg_count);
+            }
+        }
+    }
+
+    runtime_error(vm, "Can only call functions and classes.");
+    return false;
 }
 
 reset_stack :: (vm: *VM)
@@ -249,11 +284,29 @@ run :: (vm: *VM) -> InterpretResult
                 offset: = read_short(frame);
                 frame.ip -= offset;
             }
+            case .CALL;
+            {
+                arg_count: = read_byte(frame);
+                if !call_value(vm, peek(vm, arg_count), arg_count)
+                {
+                    return .RUNTIME_ERROR;
+                }
+                frame = current_frame(vm);
+            }
 
             case .RETURN;
             {
-                pop(vm);
-                return .OK;
+                result: = pop(vm);
+                vm.frame_count -= 1;
+                if vm.frame_count == 0
+                {
+                    pop(vm);
+                    return .OK;
+                }
+
+                vm.sp = frame.slots;
+                push(vm, result);
+                frame = current_frame(vm);
             }
             case .NOP;
         }
@@ -267,10 +320,16 @@ runtime_error :: (vm: *VM, message: string)
 {
     log_error(message);
 
-    frame: = current_frame(vm);
-    instruction: = frame.ip - frame.function.chunk.code.data - 1;
-    line: = get_line(*frame.function.chunk, instruction);
-    log_error("[line %] in script", line);
+    for < i: 0..vm.frame_count-1
+    {
+        frame: = *vm.frames[i];
+        function: = frame.function;
+        instruction: = frame.ip - function.chunk.code.data - 1;
+        line: = get_line(*function.chunk, instruction);
+        function_name: = ifx function.name != null then tprint("%()", function.name.str) else "script";
+        log_error("[line %] in %", line, function_name);
+    }
+
     reset_stack(vm);
 }
 

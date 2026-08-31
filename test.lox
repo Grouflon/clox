@@ -1,6 +1,15 @@
-for (var a = 0; a < 10; a = a + 2)
-{
-    print a;
+fun areWeHavingItYet() {
+  print "Yes we are!";
 }
 
-//print a > 10 or a < 0;
+print areWeHavingItYet;
+
+areWeHavingItYet();
+
+fun a() { b(); }
+fun b() { c(); }
+fun c() {
+  c("too", "many");
+}
+
+// a();
