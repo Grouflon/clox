@@ -1,24 +1,17 @@
-var c0 = clock();
+var globalSet;
+var globalGet;
 
-fun areWeHavingItYet() {
-  print "Yes we are!";
+fun main() {
+  var a = "initial";
+
+  fun set() { a = "updated"; }
+  fun get() { print a; }
+
+  globalSet = set;
+  globalGet = get;
 }
 
-print areWeHavingItYet;
-
-areWeHavingItYet();
-
-fun a() { b(); }
-fun b() { c(); }
-fun c() {
-  c("too", "many");
-}
-
-// a();
-var c1 = clock();
-var c2 = clock();
-var c3 = clock();
-
-print c1 - c0;
-print c2 - c0;
-print c3 - c0;
+main();
+globalGet();
+globalSet();
+globalGet();

@@ -1,15 +1,14 @@
-// raddbg 0.9.27 project file
+// raddbg 0.9.28 project file
 
 target:
 {
   executable: "clox.exe"
   working_directory: ""
-  enabled: 0
 }
 target:
 {
   executable: "clox.exe"
   working_directory: ""
-  enabled: 1
   arguments: "test.lox"
+  enabled: 1
 }

@@ -6,6 +6,7 @@
 #load "compiler.jai";
 #load "scanner.jai";
 #load "tools.jai";
+#load "debug.jai";
 
 DEBUG_MEMORY :: true;
 DEBUG_PRINT_CODE :: true;

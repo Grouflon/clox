@@ -5,7 +5,9 @@ ObjType :: enum
 {
     STRING;
     FUNCTION;
+    CLOSURE;
     NATIVE;
+    UPVALUE;
 }
 
 Obj :: struct
@@ -30,8 +32,28 @@ ObjFunction :: struct
     type = .FUNCTION;
 
     arity: int;
+    upvalue_count: int;
     chunk: Chunk;
     name: *ObjString;
+}
+
+ObjClosure :: struct
+{
+    #as using base: Obj;
+    type = .CLOSURE;
+
+    function: *ObjFunction;
+    upvalues: []*ObjUpvalue;
+}
+
+ObjUpvalue :: struct
+{
+    #as using base: Obj;
+    type = .UPVALUE;
+
+    location: *Value;
+    closed: Value;
+    next_upvalue: *ObjUpvalue;
 }
 
 NativeFn :: #type (arg_count: int, args: *Value) -> Value;
@@ -50,6 +72,7 @@ shutdown :: (obj :*Obj)
     {
         case .STRING; free(obj.(*ObjString).str);
         case .FUNCTION; shutdown(*obj.(*ObjFunction).chunk);
+        case .CLOSURE; free(obj.(*ObjClosure).upvalues.data);
     }
 }
 
@@ -63,7 +86,7 @@ free_objects :: ()
         shutdown(obj);
         free(obj);
 
-        obj = obj.next;
+        obj = next;
     }
     objects = null;
 }
@@ -74,7 +97,9 @@ object_to_string :: (obj: *Obj) -> string
     {
         case .STRING; return obj.(*ObjString).str;
         case .FUNCTION; return ifx obj.(*ObjFunction).name != null then tprint("<fn %>",  obj.(*ObjFunction).name.str) else "<script>";
+        case .CLOSURE; return object_to_string(obj.(*ObjClosure).function);
         case .NATIVE; return tprint("<native fn %>", obj.(*ObjNative).function);
+        case .UPVALUE; return "upvalue";
     }
     return "";
 }
@@ -103,6 +128,13 @@ is_function :: (value: Value) -> bool
     return value.obj.type == .FUNCTION;
 }
 
+is_closure :: (value: Value) -> bool
+{
+    if value.type != .OBJ return false;
+    if value.obj == null return false;
+    return value.obj.type == .CLOSURE;
+}
+
 is_native :: (value: Value) -> bool
 {
     if value.type != .OBJ return false;
@@ -113,9 +145,20 @@ is_native :: (value: Value) -> bool
 new_object :: ($T: Type) -> *T
 {
     obj: = New(T);
-    obj.next = objects;
+    obj.base.next = objects;
     objects = obj;
     return obj;
+}
+
+new_obj_closure :: (function: *ObjFunction) -> *ObjClosure
+{
+    closure: = new_object(ObjClosure);
+    closure.function = function;
+    closure.upvalues.count = function.upvalue_count;
+    size: = size_of(*ObjUpvalue) * function.upvalue_count;
+    closure.upvalues.data = alloc(size);
+    memset(closure.upvalues.data, 0, size);
+    return closure;
 }
 
 obj_value :: (obj: *Obj) -> Value
@@ -169,6 +212,12 @@ as_obj_function :: (value: Value) -> *ObjFunction
 {
     assert(is_function(value));
     return value.obj.(*ObjFunction);
+}
+
+as_obj_closure :: (value: Value) -> *ObjClosure
+{
+    assert(is_closure(value));
+    return value.obj.(*ObjClosure);
 }
 
 as_obj_native :: (value: Value) -> *ObjNative

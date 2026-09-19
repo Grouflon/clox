@@ -10,11 +10,12 @@ VM :: struct
     sp: *Value;
 
     globals: Table(*ObjString, Value);
+    open_upvalues: *ObjUpvalue;
 }
 
 CallFrame :: struct
 {
-    function: *ObjFunction;
+    closure: *ObjClosure;
     ip: *u8;
     slots: *Value;
 }
@@ -44,7 +45,11 @@ interpret :: (vm: *VM, function: *ObjFunction) -> InterpretResult
     assert(function != null);
 
     push(vm, obj_value(function));
-    call(vm, function, 0);
+    closure: = new_obj_closure(function);
+    pop(vm);
+    push(vm, obj_value(closure));
+
+    call(vm, closure, 0);
 
     return run(vm);
 }
@@ -70,11 +75,11 @@ peek :: (vm: *VM, distance: int = 0) -> Value
     return vm.sp[-1 - distance];
 }
 
-call :: (vm: *VM, function: *ObjFunction, arg_count: u8) -> bool
+call :: (vm: *VM, closure: *ObjClosure, arg_count: u8) -> bool
 {
-    if arg_count != function.arity
+    if arg_count != closure.function.arity
     {
-        runtime_error(vm, tprint("Expected % arguments but got %.", function.arity, arg_count));
+        runtime_error(vm, tprint("Expected % arguments but got %.", closure.function.arity, arg_count));
         return false;
     }
 
@@ -87,8 +92,8 @@ call :: (vm: *VM, function: *ObjFunction, arg_count: u8) -> bool
     frame: = *vm.frames[vm.frame_count];
     vm.frame_count += 1;
 
-    frame.function = function;
-    frame.ip = frame.function.chunk.code.data;
+    frame.closure = closure;
+    frame.ip = frame.closure.function.chunk.code.data;
     frame.slots = vm.sp - arg_count - 1;
     return true;
 }
@@ -99,9 +104,9 @@ call_value :: (vm: *VM, callee: Value, arg_count: u8) -> bool
     {
         if callee.obj.type ==
         {
-            case .FUNCTION;
+            case .CLOSURE;
             {
-                return call(vm, as_obj_function(callee), arg_count);
+                return call(vm, as_obj_closure(callee), arg_count);
             }
 
             case .NATIVE;
@@ -117,6 +122,49 @@ call_value :: (vm: *VM, callee: Value, arg_count: u8) -> bool
 
     runtime_error(vm, "Can only call functions and classes.");
     return false;
+}
+
+capture_upvalue :: (vm: *VM, local: *Value) -> *ObjUpvalue
+{
+    prev_upvalue: *ObjUpvalue;
+    upvalue: = vm.open_upvalues;
+
+    while upvalue != null && upvalue.location > local
+    {
+        prev_upvalue = upvalue;
+        upvalue = upvalue.next_upvalue;
+    }
+
+    if upvalue != null && upvalue.location == local
+    {
+        return upvalue;
+    }
+
+    created_upvalue: = new_object(ObjUpvalue);
+    created_upvalue.location = local;
+    created_upvalue.next_upvalue = upvalue;
+
+    if prev_upvalue == null
+    {
+        vm.open_upvalues = created_upvalue;
+    }
+    else
+    {
+        prev_upvalue.next = created_upvalue;
+    }
+
+    return created_upvalue;
+}
+
+close_upvalues :: (vm: *VM, last: *Value)
+{
+    while vm.open_upvalues != null && vm.open_upvalues.location >= last
+    {
+        upvalue: = vm.open_upvalues;
+        upvalue.closed = upvalue.location.*;
+        upvalue.location = *upvalue.closed;
+        vm.open_upvalues = upvalue.next_upvalue;
+    }
 }
 
 reset_stack :: (vm: *VM)
@@ -142,7 +190,7 @@ run :: (vm: *VM) -> InterpretResult
 
     read_constant :: (frame: *CallFrame) -> Value
     {
-        return frame.function.chunk.constants[read_byte(frame)];
+        return frame.closure.function.chunk.constants[read_byte(frame)];
     }
 
     read_string :: (frame: *CallFrame) -> *ObjString
@@ -181,7 +229,7 @@ run :: (vm: *VM) -> InterpretResult
                 sp += 1;
             }
             print("\n");
-            disassemble_instruction(*frame.function.chunk, frame.ip - frame.function.chunk.code.data);
+            disassemble_instruction(*frame.closure.function.chunk, frame.ip - frame.closure.function.chunk.code.data);
         }
 
         instruction: OpCode = xx read_byte(frame);
@@ -281,6 +329,16 @@ run :: (vm: *VM) -> InterpretResult
                 slot: = read_byte(frame);
                 frame.slots[slot] = peek(vm);
             }
+            case .GET_UPVALUE;
+            {
+                slot: = read_byte(frame);
+                push(vm, frame.closure.upvalues[slot].location.*);
+            }
+            case .SET_UPVALUE;
+            {
+                slot: = read_byte(frame);
+                frame.closure.upvalues[slot].location.* = peek(vm);
+            }
             case .JUMP_IF_FALSE;
             {
                 offset: = read_short(frame);
@@ -305,10 +363,37 @@ run :: (vm: *VM) -> InterpretResult
                 }
                 frame = current_frame(vm);
             }
+            case .CLOSURE;
+            {
+                function: = as_obj_function(read_constant(frame));
+                closure: = new_obj_closure(function);
+                push(vm, obj_value(closure));
+
+                for i: 0..closure.upvalues.count-1
+                {
+                    is_local: = read_byte(frame);
+                    index: = read_byte(frame);
+
+                    if is_local
+                    {
+                        closure.upvalues[i] = capture_upvalue(vm, frame.slots + index);
+                    }
+                    else
+                    {
+                        closure.upvalues[i] = frame.closure.upvalues[index];
+                    }
+                }
+            }
+            case .CLOSE_UPVALUE;
+            {
+                close_upvalues(vm, vm.sp - 1);
+                pop(vm);
+            }
 
             case .RETURN;
             {
                 result: = pop(vm);
+                close_upvalues(vm, frame.slots);
                 vm.frame_count -= 1;
                 if vm.frame_count == 0
                 {
@@ -335,7 +420,7 @@ runtime_error :: (vm: *VM, message: string)
     for < i: 0..vm.frame_count-1
     {
         frame: = *vm.frames[i];
-        function: = frame.function;
+        function: = frame.closure.function;
         instruction: = frame.ip - function.chunk.code.data - 1;
         line: = get_line(*function.chunk, instruction);
         function_name: = ifx function.name != null then tprint("%()", function.name.str) else "script";

@@ -14,12 +14,14 @@ tokenizer_init :: (t: *Tokenizer, source: string)
 Compiler :: struct
 {
     tokenizer: *Tokenizer;
+    parent: *Compiler;
 
     function: *ObjFunction;
     function_type: FunctionType;
 
     locals: [U8_MAX+1]Local;
     local_count: int;
+    upvalues: [U8_MAX+1]Upvalue;
     scope_depth: int;
 
     panic_mode: bool;
@@ -265,6 +267,7 @@ compile_function :: (parent_compiler: *Compiler, type: FunctionType)
 {
     compiler: Compiler;
     c: = *compiler;
+    c.parent = parent_compiler;
     begin_compiler(c, parent_compiler.tokenizer, type);
     begin_scope(c); // no need to end scope, compiler will disappear just after
 
@@ -291,8 +294,15 @@ compile_function :: (parent_compiler: *Compiler, type: FunctionType)
     compile_block_statement(c);
 
     f: = end_compiler(c);
+
     c = parent_compiler;
-    emit_bytes(c, xx OpCode.CONSTANT, make_constant(c, obj_value(f)));
+    emit_bytes(c, xx OpCode.CLOSURE, make_constant(c, obj_value(f)));
+
+    for i: 0..f.upvalue_count-1
+    {
+        emit_byte(c, xx ifx compiler.upvalues[i].is_local then 1 else 0);
+        emit_byte(c, compiler.upvalues[i].index);
+    }
 }
 
 compile_expression :: (c: *Compiler)
@@ -348,9 +358,18 @@ compile_named_variable :: (c: *Compiler, name: Token, can_assign: bool)
     }
     else
     {
-        arg = identifier_constant(c, name);
-        get_op = .GET_GLOBAL;
-        set_op = .SET_GLOBAL;
+        arg = resolve_upvalue(c, name);
+        if arg != -1
+        {
+            get_op = .GET_UPVALUE;
+            set_op = .SET_UPVALUE;
+        }
+        else
+        {
+            arg = identifier_constant(c, name);
+            get_op = .GET_GLOBAL;
+            set_op = .SET_GLOBAL;
+        }
     }
 
     if can_assign && try_consume(c, .EQUAL)
@@ -485,6 +504,13 @@ Local :: struct
 {
     name: Token;
     depth: int;
+    is_captured: bool;
+}
+
+Upvalue :: struct
+{
+    index: u8;
+    is_local: bool;
 }
 
 FunctionType :: enum
@@ -755,6 +781,50 @@ resolve_local :: (c: *Compiler, name: Token) -> int
     return -1;
 }
 
+add_upvalue :: (c: *Compiler, index: u8, is_local: bool) -> int
+{
+    upvalue_count: = c.function.upvalue_count;
+
+    for i: 0..upvalue_count-1
+    {
+        upvalue: = *c.upvalues[i];
+        if upvalue.index == index && upvalue.is_local == is_local
+            return i;
+    }
+
+    if upvalue_count >= c.upvalues.count
+    {
+        error(c, "Too many closure variables in function.");
+        return 0;
+    }
+
+    c.upvalues[upvalue_count].is_local = is_local;
+    c.upvalues[upvalue_count].index = index;
+    c.function.upvalue_count += 1;
+
+    return upvalue_count;
+}
+
+resolve_upvalue :: (c: *Compiler, name: Token) -> int
+{
+    if c.parent == null return -1;
+
+    local: = resolve_local(c.parent, name);
+    if local != -1
+    {
+        c.parent.locals[local].is_captured = true;
+        return add_upvalue(c, xx local, true);
+    }
+
+    upvalue: = resolve_upvalue(c.parent, name);
+    if upvalue != -1
+    {
+        return add_upvalue(c, xx upvalue, false);
+    }
+
+    return -1;
+}
+
 begin_scope :: (c: *Compiler)
 {
     c.scope_depth += 1;
@@ -767,7 +837,14 @@ end_scope :: (c: *Compiler)
 
     while c.local_count > 0 && c.locals[c.local_count-1].depth > c.scope_depth
     {
-        emit_byte(c, xx OpCode.POP);
+        if c.locals[c.local_count-1].is_captured
+        {
+            emit_byte(c, xx OpCode.CLOSE_UPVALUE);
+        }
+        else
+        {
+            emit_byte(c, xx OpCode.POP);
+        }
         c.local_count -= 1;
     }
 }
