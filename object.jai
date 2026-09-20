@@ -1,6 +1,3 @@
-objects: *Obj;
-strings: Table(u32, *ObjString);
-
 ObjType :: enum
 {
     STRING;
@@ -14,6 +11,7 @@ Obj :: struct
 {
     type: ObjType;
     next: *Obj;
+    is_marked: bool;
 }
 
 ObjString :: struct
@@ -66,29 +64,20 @@ ObjNative :: struct
     function: NativeFn;
 }
 
-shutdown :: (obj :*Obj)
+free_object :: (vm: *VM, obj: *Obj)
 {
+    #if DEBUG_LOG_GC
+    {
+        log("% free type %", obj, obj.type);
+    }
+
     if obj.type ==
     {
         case .STRING; free(obj.(*ObjString).str);
         case .FUNCTION; shutdown(*obj.(*ObjFunction).chunk);
-        case .CLOSURE; free(obj.(*ObjClosure).upvalues.data);
+        case .CLOSURE; array_free(obj.(*ObjClosure).upvalues);
     }
-}
-
-free_objects :: ()
-{
-    obj: = objects;
-    while obj != null
-    {
-        next: = obj.next;
-
-        shutdown(obj);
-        free(obj);
-
-        obj = next;
-    }
-    objects = null;
+    free(obj);
 }
 
 object_to_string :: (obj: *Obj) -> string
@@ -142,22 +131,35 @@ is_native :: (value: Value) -> bool
     return value.obj.type == .NATIVE;
 }
 
-new_object :: ($T: Type) -> *T
+new_object :: (vm: *VM, $T: Type) -> *T
 {
     obj: = New(T);
-    obj.base.next = objects;
-    objects = obj;
+    push(vm, obj_value(obj));
+    defer pop(vm);
+
+    obj.base.next = vm.objects;
+    vm.objects = obj;
+
+    #if DEBUG_LOG_GC
+    {
+        log("% allocate % for %", obj, size_of(T), obj.type);
+    }
+
     return obj;
 }
 
-new_obj_closure :: (function: *ObjFunction) -> *ObjClosure
+new_obj_closure :: (vm: *VM, function: *ObjFunction) -> *ObjClosure
 {
-    closure: = new_object(ObjClosure);
+    closure: = new_object(vm, ObjClosure);
+    push(vm, obj_value(closure));
+    defer pop(vm);
+
     closure.function = function;
-    closure.upvalues.count = function.upvalue_count;
+
     size: = size_of(*ObjUpvalue) * function.upvalue_count;
     closure.upvalues.data = alloc(size);
     memset(closure.upvalues.data, 0, size);
+    closure.upvalues.count = function.upvalue_count;
     return closure;
 }
 
@@ -169,17 +171,20 @@ obj_value :: (obj: *Obj) -> Value
     };
 }
 
-obj_string_value :: (str: string) -> Value
+obj_string_value :: (vm: *VM, str: string) -> Value
 {
     hash: = get_hash(str);
-    found, obj: = table_find(*strings, hash);
+    found, obj: = table_find(*vm.strings, hash);
     if !found
     {
-        obj = new_object(ObjString);
+        obj = new_object(vm, ObjString);
+        push(vm, obj_value(obj));
+        defer pop(vm);
+
         obj.str = copy_string(str);
         obj.hash = hash;
 
-        table_add(*strings, hash, obj);
+        table_add(*vm.strings, hash, obj);
     }
     else
     {
@@ -189,15 +194,15 @@ obj_string_value :: (str: string) -> Value
     return obj_value(obj);
 }
 
-obj_function_value :: () -> Value
+obj_function_value :: (vm: *VM) -> Value
 {
-    obj: = new_object(ObjFunction);
+    obj: = new_object(vm, ObjFunction);
     return obj_value(obj);
 }
 
-obj_native_value :: (function: NativeFn) -> Value
+obj_native_value :: (vm: *VM, function: NativeFn) -> Value
 {
-    obj: = new_object(ObjNative);
+    obj: = new_object(vm, ObjNative);
     obj.function = function;
     return obj_value(obj);
 }

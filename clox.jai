@@ -11,11 +11,15 @@
 DEBUG_MEMORY :: true;
 DEBUG_PRINT_CODE :: true;
 DEBUG_TRACE_EXECUTION :: true;
+DEBUG_STRESS_GC :: false;
+DEBUG_LOG_GC :: true;
 
 main :: ()
 {
     {
         args: = get_command_line_arguments();
+        defer array_free(args);
+
         if args.count ==
         {
             case 1;
@@ -36,10 +40,6 @@ main :: ()
                 print("Usage: clox [script]");
             }
         }
-
-        array_free(args);
-        free_objects();
-        deinit(*strings);
     }
 
     // Memory leak check
@@ -58,29 +58,35 @@ main :: ()
 repl :: ()
 {
     vm: VM;
-    init(*vm);
-    defer shutdown(*vm);
 
-    while true
+    ctx := context;
+    ctx.allocator.proc = clox_allocator_proc;
+    ctx.allocator.data = *vm;
+    push_context ctx
     {
-        print("> ");
-        line: = read_line();
-        
-        if (line.count == 1 && line[0] == 0x4) || line == "exit" break;
+        init(*vm);
+        defer shutdown(*vm);
 
-        tokenizer: Tokenizer;
-        tokenizer_init(*tokenizer, line);
-
-        compiler: Compiler;
-        f: = compile(*compiler, *tokenizer);
-        if f == null
+        while true
         {
-            continue;
-        }
+            print("> ");
+            line: = read_line();
+            
+            if (line.count == 1 && line[0] == 0x4) || line == "exit" break;
 
-        interpret(*vm, f);
+            tokenizer: Tokenizer;
+            tokenizer_init(*tokenizer, line);
+
+            compiler: Compiler;
+            f: = compile(*compiler, *tokenizer, *vm);
+            if f == null
+            {
+                continue;
+            }
+
+            interpret(*vm, f);
+        }
     }
-    
 }
 
 run_file :: (path: string) -> InterpretResult
@@ -95,22 +101,30 @@ run_file :: (path: string) -> InterpretResult
         return .COMPILE_ERROR;
     }
 
-    // Compile
-    tokenizer: Tokenizer;
-    tokenizer_init(*tokenizer, data);
-
-    compiler: Compiler;
-    f: = compile(*compiler, *tokenizer);
-    if f == null
-    {
-        return .COMPILE_ERROR;
-    }
-
-    // Run
     vm: VM;
-    init(*vm);
-    defer shutdown(*vm);
-    return interpret(*vm, f);
+
+    ctx := context;
+    ctx.allocator.proc = clox_allocator_proc;
+    ctx.allocator.data = *vm;
+    push_context ctx
+    {
+        init(*vm);
+        defer shutdown(*vm);
+
+        // Compile
+        tokenizer: Tokenizer;
+        tokenizer_init(*tokenizer, data);
+
+        compiler: Compiler;
+        f: = compile(*compiler, *tokenizer, *vm);
+        if f == null
+        {
+            return .COMPILE_ERROR;
+        }
+
+        // Run
+        return interpret(*vm, f);
+    }
 }
 
 #scope_file

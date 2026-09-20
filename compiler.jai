@@ -14,6 +14,7 @@ tokenizer_init :: (t: *Tokenizer, source: string)
 Compiler :: struct
 {
     tokenizer: *Tokenizer;
+    vm: *VM;
     parent: *Compiler;
 
     function: *ObjFunction;
@@ -28,9 +29,9 @@ Compiler :: struct
     had_error: bool;
 }
 
-compile :: (c: *Compiler, tokenizer: *Tokenizer) -> *ObjFunction
+compile :: (c: *Compiler, tokenizer: *Tokenizer, vm: *VM) -> *ObjFunction
 {
-    begin_compiler(c, tokenizer, .SCRIPT);
+    begin_compiler(c, tokenizer, vm, .SCRIPT);
 
     while !try_consume(c, .EOF)
     {
@@ -268,7 +269,7 @@ compile_function :: (parent_compiler: *Compiler, type: FunctionType)
     compiler: Compiler;
     c: = *compiler;
     c.parent = parent_compiler;
-    begin_compiler(c, parent_compiler.tokenizer, type);
+    begin_compiler(c, parent_compiler.tokenizer, parent_compiler.vm, type);
     begin_scope(c); // no need to end scope, compiler will disappear just after
 
     consume(c, .LEFT_PAREN, "Expect '(' after function name.");
@@ -338,7 +339,7 @@ compile_string :: (c: *Compiler, can_assign: bool)
     str.data += 1;
     str.count -= 2;
 
-    emit_constant(c, obj_string_value(str));
+    emit_constant(c, obj_string_value(c.vm, str));
 }
 
 compile_variable :: (c: *Compiler, can_assign: bool)
@@ -744,7 +745,7 @@ declare_variable :: (c: *Compiler)
 
 identifier_constant :: (c: *Compiler, name: Token) -> u8
 {
-    return make_constant(c, obj_string_value(name.lexeme));
+    return make_constant(c, obj_string_value(c.vm, name.lexeme));
 }
 
 add_local :: (c: *Compiler, name: Token)
@@ -849,15 +850,16 @@ end_scope :: (c: *Compiler)
     }
 }
 
-begin_compiler :: (c: *Compiler, tokenizer: *Tokenizer, function_type: FunctionType)
+begin_compiler :: (c: *Compiler, tokenizer: *Tokenizer, vm: *VM, function_type: FunctionType)
 {
     c.tokenizer = tokenizer;
+    c.vm = vm;
     if current_token(c).type == .ERROR
     {
         error_at_current(c);
     }
 
-    c.function = xx obj_function_value().obj;
+    c.function = xx obj_function_value(vm).obj;
     c.function_type = function_type;
 
     local: = *c.locals[c.local_count];
@@ -868,7 +870,7 @@ begin_compiler :: (c: *Compiler, tokenizer: *Tokenizer, function_type: FunctionT
     if c.function_type == .FUNCTION
     {
         assert(previous_token(c).type == .IDENTIFIER);
-        c.function.name = xx obj_string_value(previous_token(c).lexeme).obj;
+        c.function.name = xx obj_string_value(vm, previous_token(c).lexeme).obj;
     }
 }
 

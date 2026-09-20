@@ -10,7 +10,13 @@ VM :: struct
     sp: *Value;
 
     globals: Table(*ObjString, Value);
+    objects: *Obj;
+    strings: Table(u32, *ObjString);
     open_upvalues: *ObjUpvalue;
+
+    // GC
+    bytes_allocated: s64;
+    next_gc: s64;
 }
 
 CallFrame :: struct
@@ -23,6 +29,7 @@ CallFrame :: struct
 init :: (vm: *VM)
 {
     reset_stack(vm);
+    vm.next_gc = 1024*1024;
     
     base_time = current_time_consensus();
     define_native(vm, "clock", clock_native);
@@ -31,6 +38,189 @@ init :: (vm: *VM)
 shutdown :: (vm: *VM)
 {
     table_reset(*vm.globals);
+    free_objects(vm);
+    deinit(*vm.strings);
+
+    assert(vm.bytes_allocated == 0);
+}
+
+free_objects :: (vm: *VM)
+{
+    obj: = vm.objects;
+    while obj != null
+    {
+        next: = obj.next;
+        free_object(vm, obj);
+        obj = next;
+    }
+    vm.objects = null;
+}
+
+collect_garbage :: (vm: *VM)
+{
+    GC_HEAP_GROW_FACTOR :: 2;
+
+    if vm.frame_count == 0 return; // prevent GC during compilation
+
+    #if DEBUG_LOG_GC
+    {
+        log("-- gc begin");
+        before: = vm.bytes_allocated;
+    }
+
+    gray_stack: [..]*Obj;
+    gray_stack.allocator = temporary_allocator;
+
+    mark_roots(vm, *gray_stack);
+    trace_references(vm, *gray_stack);
+
+    // Remove white strings in string table
+    for str, key : vm.strings
+    {
+        if !str.is_marked
+        {
+            table_remove(*vm.strings, key);
+        }
+    }
+
+    sweep(vm);
+
+    vm.next_gc = vm.bytes_allocated * GC_HEAP_GROW_FACTOR;
+
+    #if DEBUG_LOG_GC
+    {
+        log("-- gc end");
+        log("   collected % bytes (from % to %) next at %", before - vm.bytes_allocated, before, vm.bytes_allocated, vm.next_gc);
+    }
+}
+
+mark_roots :: (vm: *VM, gray_stack: *[..]*Obj)
+{
+    // Mark stack
+    slot: = vm.stack.data;
+    while slot < vm.sp
+    {
+        mark_value(vm, gray_stack, slot.*);
+        slot += 1;
+    }
+
+    // Mark globals
+    for value, key: vm.globals
+    {
+        mark_object(vm, gray_stack, key);
+        mark_value(vm, gray_stack, value);
+    }
+
+    // Mark frames
+    for i: 0..vm.frame_count-1
+    {
+        mark_object(vm, gray_stack, vm.frames[i].closure);
+    }
+
+    // Mark upvalues
+    upvalue: = vm.open_upvalues;
+    while upvalue != null
+    {
+        mark_object(vm, gray_stack, upvalue);
+        upvalue = upvalue.next_upvalue;
+    }
+}
+
+mark_value :: (vm: *VM, gray_stack: *[..]*Obj, value: Value)
+{
+    if value.type != .OBJ return;
+    mark_object(vm, gray_stack, value.obj);
+}
+
+mark_object :: (vm: *VM, gray_stack: *[..]*Obj, obj: *Obj)
+{
+    if obj == null return;
+    if obj.is_marked return;
+
+    obj.is_marked = true;
+
+    array_add(gray_stack, obj);
+
+    #if DEBUG_LOG_GC
+    {
+        log("% mark %", obj, object_to_string(obj));
+    }
+}
+
+trace_references :: (vm: *VM, gray_stack: *[..]*Obj)
+{
+    while gray_stack.count > 0
+    {
+        obj: = pop(gray_stack);
+        blacken_object(vm, gray_stack, obj);
+    }
+}
+
+blacken_object :: (vm: *VM, gray_stack: *[..]*Obj, obj: *Obj)
+{
+    #if DEBUG_LOG_GC
+    {
+        log("% blacken %", obj, object_to_string(obj));
+    }
+
+    if obj.type ==
+    {
+        case .CLOSURE;
+        {
+            c: = obj.(*ObjClosure);
+            mark_object(vm, gray_stack, c.function);
+            for upvalue: c.upvalues
+            {
+                mark_object(vm, gray_stack, upvalue);
+            }
+        }
+
+        case .FUNCTION;
+        {
+            f: = obj.(*ObjFunction);
+            mark_object(vm, gray_stack, f.name);
+            for value: f.chunk.constants
+            {
+                mark_value(vm, gray_stack, value);
+            }
+        }
+
+        case .UPVALUE;
+        {
+            mark_value(vm, gray_stack, obj.(*ObjUpvalue).closed);
+        }
+
+        case .NATIVE;
+        case .STRING;
+    }
+}
+
+sweep :: (vm: *VM)
+{
+    previous: *Obj;
+    obj: = vm.objects;
+    while obj != null
+    {
+        if obj.is_marked
+        {
+            obj.is_marked = false;
+            previous = obj;
+            obj = obj.next;
+            continue;
+        }
+
+        unreached: = obj;
+        obj = obj.next;
+        if previous != null
+        {
+            previous.next = obj;
+        }
+        else
+        {
+            vm.objects = obj;
+        }
+        free_object(vm, unreached);
+    }
 }
 
 InterpretResult :: enum
@@ -45,7 +235,7 @@ interpret :: (vm: *VM, function: *ObjFunction) -> InterpretResult
     assert(function != null);
 
     push(vm, obj_value(function));
-    closure: = new_obj_closure(function);
+    closure: = new_obj_closure(vm, function);
     pop(vm);
     push(vm, obj_value(closure));
 
@@ -140,7 +330,7 @@ capture_upvalue :: (vm: *VM, local: *Value) -> *ObjUpvalue
         return upvalue;
     }
 
-    created_upvalue: = new_object(ObjUpvalue);
+    created_upvalue: = new_object(vm, ObjUpvalue);
     created_upvalue.location = local;
     created_upvalue.next_upvalue = upvalue;
 
@@ -252,7 +442,7 @@ run :: (vm: *VM) -> InterpretResult
                 {
                     b: = as_obj_string(pop(vm));
                     a: = as_obj_string(pop(vm));
-                    result: = obj_string_value(tprint("%%", a.str, b.str));
+                    result: = obj_string_value(vm, tprint("%%", a.str, b.str));
 
                     push(vm, result);
                 }
@@ -366,7 +556,7 @@ run :: (vm: *VM) -> InterpretResult
             case .CLOSURE;
             {
                 function: = as_obj_function(read_constant(frame));
-                closure: = new_obj_closure(function);
+                closure: = new_obj_closure(vm, function);
                 push(vm, obj_value(closure));
 
                 for i: 0..closure.upvalues.count-1
@@ -432,11 +622,43 @@ runtime_error :: (vm: *VM, message: string)
 
 define_native :: (vm: *VM, name: string, function: NativeFn)
 {
-    push(vm, obj_string_value(name));
-    push(vm, obj_native_value(function));
+    push(vm, obj_string_value(vm, name));
+    push(vm, obj_native_value(vm, function));
     table_set(*vm.globals, as_obj_string(peek(vm, 1)), peek(vm, 0));
     pop(vm);
     pop(vm);
+}
+
+clox_allocator_proc :: (mode: Allocator_Mode, size: s64, old_size: s64, old_memory_pointer: *void, proc_data: *void) -> *void
+{
+    vm: = proc_data.(*VM);
+    assert(vm != null);
+
+    #if DEBUG_STRESS_GC
+    {
+        if size > old_size
+        {
+            collect_garbage(vm);
+        }
+    }
+    else
+    {
+        if vm.bytes_allocated > vm.next_gc
+        {
+            collect_garbage(vm);
+        }
+    }
+
+    old_usable_size: = usable_size(old_memory_pointer);
+
+    result: = context.default_allocator.proc(mode, size, old_size, old_memory_pointer, context.default_allocator.data);
+
+    new_usable_size: = usable_size(result);
+
+    vm.bytes_allocated += new_usable_size - old_usable_size;
+    assert(vm.bytes_allocated >= 0); // counting problem
+
+    return result;
 }
 
 #scope_file
@@ -452,3 +674,5 @@ clock_native :: (arg_count: int, args: *Value) -> Value
 {
     return number_value(to_microseconds(current_time_consensus() - base_time).(float) / 1_000_000);
 }
+
+#import "Default_Allocator";
