@@ -30,6 +30,9 @@ OpCode :: enum u8
     CALL;
     CLOSURE;
     CLOSE_UPVALUE;
+    CLASS;
+    GET_PROPERTY;
+    SET_PROPERTY;
 }
 
 LineInfo :: struct

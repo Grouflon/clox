@@ -77,6 +77,9 @@ disassemble_instruction :: (chunk: *Chunk, offset: int) -> int
             return o;
         }
         case .CLOSE_UPVALUE; return simple_instruction("CLOSE_UPVALUE", offset);
+        case .CLASS; return constant_instruction("CLASS", chunk, offset);
+        case .GET_PROPERTY; return constant_instruction("GET_PROPERTY", chunk, offset);
+        case .SET_PROPERTY; return constant_instruction("SET_PROPERTY", chunk, offset);
         case;
         {
             print("Unknown OpCode: %", formatInt(instruction.(u8), 16, 2));

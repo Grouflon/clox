@@ -5,6 +5,8 @@ ObjType :: enum
     CLOSURE;
     NATIVE;
     UPVALUE;
+    CLASS;
+    INSTANCE;
 }
 
 Obj :: struct
@@ -54,6 +56,23 @@ ObjUpvalue :: struct
     next_upvalue: *ObjUpvalue;
 }
 
+ObjClass :: struct
+{
+    #as using base: Obj;
+    type = .CLASS;
+
+    name: *ObjString;
+}
+
+ObjInstance :: struct
+{
+    #as using base: Obj;
+    type = .INSTANCE;
+
+    clss: *ObjClass;
+    fields: Table(*ObjString, Value);
+}
+
 NativeFn :: #type (arg_count: int, args: *Value) -> Value;
 
 ObjNative :: struct
@@ -76,6 +95,7 @@ free_object :: (vm: *VM, obj: *Obj)
         case .STRING; free(obj.(*ObjString).str);
         case .FUNCTION; shutdown(*obj.(*ObjFunction).chunk);
         case .CLOSURE; array_free(obj.(*ObjClosure).upvalues);
+        case .INSTANCE; table_reset(*obj.(*ObjInstance).fields);
     }
     free(obj);
 }
@@ -89,6 +109,8 @@ object_to_string :: (obj: *Obj) -> string
         case .CLOSURE; return object_to_string(obj.(*ObjClosure).function);
         case .NATIVE; return tprint("<native fn %>", obj.(*ObjNative).function);
         case .UPVALUE; return "upvalue";
+        case .CLASS; return object_to_string(obj.(*ObjClass).name);
+        case .INSTANCE; return tprint("% instance", object_to_string(obj.(*ObjInstance).clss));
     }
     return "";
 }
@@ -131,6 +153,20 @@ is_native :: (value: Value) -> bool
     return value.obj.type == .NATIVE;
 }
 
+is_class :: (value: Value) -> bool
+{
+    if value.type != .OBJ return false;
+    if value.obj == null return false;
+    return value.obj.type == .CLASS;
+}
+
+is_instance :: (value: Value) -> bool
+{
+    if value.type != .OBJ return false;
+    if value.obj == null return false;
+    return value.obj.type == .INSTANCE;
+}
+
 new_object :: (vm: *VM, $T: Type) -> *T
 {
     obj: = New(T);
@@ -161,6 +197,20 @@ new_obj_closure :: (vm: *VM, function: *ObjFunction) -> *ObjClosure
     memset(closure.upvalues.data, 0, size);
     closure.upvalues.count = function.upvalue_count;
     return closure;
+}
+
+new_obj_class :: (vm: *VM, name: *ObjString) -> *ObjClass
+{
+    clss: = new_object(vm, ObjClass);
+    clss.name = name;
+    return clss;
+}
+
+new_obj_instance :: (vm: *VM, clss: *ObjClass) -> *ObjInstance
+{
+    instance: = new_object(vm, ObjInstance);
+    instance.clss = clss;
+    return instance;
 }
 
 obj_value :: (obj: *Obj) -> Value
@@ -229,6 +279,18 @@ as_obj_native :: (value: Value) -> *ObjNative
 {
     assert(is_native(value));
     return value.obj.(*ObjNative);
+}
+
+as_obj_class :: (value: Value) -> *ObjClass
+{
+    assert(is_class(value));
+    return value.obj.(*ObjClass);
+}
+
+as_obj_instance :: (value: Value) -> *ObjInstance
+{
+    assert(is_instance(value));
+    return value.obj.(*ObjInstance);
 }
 
 #scope_file

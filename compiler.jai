@@ -45,6 +45,10 @@ compile :: (c: *Compiler, tokenizer: *Tokenizer, vm: *VM) -> *ObjFunction
 
 compile_declaration_statement :: (c: *Compiler)
 {
+    if try_consume(c, .CLASS)
+    {
+        compile_class_statement(c);
+    }
     if try_consume(c, .FUN)
     {
         compile_fun_statement(c);
@@ -96,6 +100,19 @@ compile_statement :: (c: *Compiler)
     {
         compile_expression_statement(c);
     }
+}
+
+compile_class_statement :: (c: *Compiler)
+{
+    consume(c, .IDENTIFIER, "Expect class name");
+    name_constant: = identifier_constant(c, previous_token(c));
+    declare_variable(c);
+
+    emit_bytes(c, xx OpCode.CLASS, name_constant);
+    define_variable(c, name_constant);
+
+    consume(c, .LEFT_BRACE, "Expect '{' before class body.");
+    consume(c, .RIGHT_BRACE, "Expect '}' after class body.");
 }
 
 compile_fun_statement :: (c: *Compiler)
@@ -431,6 +448,22 @@ compile_call :: (c: *Compiler, can_assign: bool)
     emit_bytes(c, xx OpCode.CALL, arg_count);
 }
 
+compile_dot :: (c: *Compiler, can_assign: bool)
+{
+    consume(c, .IDENTIFIER, "Expect property name after '.'.");
+    name: = identifier_constant(c, previous_token(c));
+
+    if can_assign && try_consume(c, .EQUAL)
+    {
+        compile_expression(c);
+        emit_bytes(c, xx OpCode.SET_PROPERTY, name);
+    }
+    else
+    {
+        emit_bytes(c, xx OpCode.GET_PROPERTY, name);
+    }
+}
+
 argument_list :: (c: *Compiler) -> u8
 {
     arg_count: u8;
@@ -526,7 +559,7 @@ rules :: ParseRule.[
     .{null,              null,               .NONE},         // LEFT_BRACE;
     .{null,              null,               .NONE},         // RIGHT_BRACE;
     .{null,              null,               .NONE},         // COMMA;
-    .{null,              null,               .NONE},         // DOT;
+    .{null,              compile_dot,        .CALL},         // DOT;
     .{compile_unary,     compile_binary,     .TERM},         // MINUS;
     .{null,              compile_binary,     .TERM},         // PLUS;
     .{null,              null,               .NONE},         // SEMICOLON;

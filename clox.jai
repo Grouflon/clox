@@ -11,8 +11,8 @@
 DEBUG_MEMORY :: true;
 DEBUG_PRINT_CODE :: true;
 DEBUG_TRACE_EXECUTION :: true;
-DEBUG_STRESS_GC :: false;
-DEBUG_LOG_GC :: true;
+DEBUG_STRESS_GC :: true;
+DEBUG_LOG_GC :: false;
 
 main :: ()
 {

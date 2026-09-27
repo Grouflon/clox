@@ -163,7 +163,7 @@ blacken_object :: (vm: *VM, gray_stack: *[..]*Obj, obj: *Obj)
         log("% blacken %", obj, object_to_string(obj));
     }
 
-    if obj.type ==
+    if #complete obj.type == 
     {
         case .CLOSURE;
         {
@@ -188,6 +188,23 @@ blacken_object :: (vm: *VM, gray_stack: *[..]*Obj, obj: *Obj)
         case .UPVALUE;
         {
             mark_value(vm, gray_stack, obj.(*ObjUpvalue).closed);
+        }
+
+        case .CLASS;
+        {
+            mark_object(vm, gray_stack, obj.(*ObjClass).name);
+        }
+
+        case .INSTANCE;
+        {
+            instance: = obj.(*ObjInstance);
+            mark_object(vm, gray_stack, instance.clss);
+
+            for value, key: instance.fields
+            {
+                mark_object(vm, gray_stack, key);
+                mark_value(vm, gray_stack, value);
+            }
         }
 
         case .NATIVE;
@@ -294,6 +311,13 @@ call_value :: (vm: *VM, callee: Value, arg_count: u8) -> bool
     {
         if callee.obj.type ==
         {
+            case .CLASS;
+            {
+                clss: = as_obj_class(callee);
+                vm.sp[-arg_count.(s8) - 1] = obj_value(new_obj_instance(vm, clss));
+                return true;
+            }
+
             case .CLOSURE;
             {
                 return call(vm, as_obj_closure(callee), arg_count);
@@ -578,6 +602,48 @@ run :: (vm: *VM) -> InterpretResult
             {
                 close_upvalues(vm, vm.sp - 1);
                 pop(vm);
+            }
+
+            case .CLASS;
+            {
+                push(vm, obj_value(new_obj_class(vm, read_string(frame))));
+            }
+
+            case .GET_PROPERTY;
+            {
+                if !is_instance(peek(vm))
+                {
+                    runtime_error(vm, "Only instances have properties.");
+                    return .RUNTIME_ERROR;
+                }
+                instance: = as_obj_instance(peek(vm));
+
+                name: = read_string(frame);
+
+                found, value: = table_find(*instance.fields, name);
+                if !found
+                {
+                    runtime_error(vm, tprint("Undefined property '%'.", name));
+                    return .RUNTIME_ERROR;
+                }
+
+                pop(vm); // instance
+                push(vm, value);
+            }
+
+            case .SET_PROPERTY;
+            {
+                if !is_instance(peek(vm, 1))
+                {
+                    runtime_error(vm, "Only instances have fields.");
+                    return .RUNTIME_ERROR;
+                }
+                instance: = as_obj_instance(peek(vm, 1));
+                table_set(*instance.fields, read_string(frame), peek(vm));
+
+                value: = pop(vm);
+                pop(vm);
+                push(vm, value);
             }
 
             case .RETURN;
